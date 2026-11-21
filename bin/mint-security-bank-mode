@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Lançador do Modo Banco com conta/servidor gráfico separados, áudio isolado e retorno ao VT."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import pwd
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+repo_src = Path(__file__).resolve().parents[1] / "src"
+if repo_src.is_dir():
+    sys.path.insert(0, str(repo_src))
+
+from mintsec.firewall_trust import verify_root_owned_path_chain  # noqa: E402
+
+ALLOWED_BANK_BROWSERS = frozenset(
+    {
+        "/usr/bin/firefox",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/brave-browser",
+    }
+)
+
+
+def validate_bank_launch(
+    bank_user: str,
+    bank_vt: int,
+    browser_cmd: list[str],
+    *,
+    check_exists: bool = True,
+) -> list[str]:
+    """Valida parâmetros de VT, conta dedicada e binário confiável do navegador."""
+    if not bank_user or bank_user == "root":
+        raise ValueError(f"Conta dedicada inválida para Modo Banco: {bank_user!r}")
+    if not (2 <= int(bank_vt) <= 12):
+        raise ValueError(f"VT fora do intervalo permitido (2..12): {bank_vt}")
+    if not browser_cmd:
+        raise ValueError("Comando de navegador vazio.")
+    prog = str(browser_cmd[0]).strip()
+    if prog not in ALLOWED_BANK_BROWSERS:
+        raise PermissionError(f"Navegador não permitido no Modo Banco: {prog}")
+    if check_exists:
+        chain = verify_root_owned_path_chain(prog)
+        if not chain.safe:
+            raise PermissionError(f"Executável do navegador inseguro: {chain.reason}")
+        return [chain.resolved_path, *browser_cmd[1:]]
+    return list(browser_cmd)
+
+
+def detect_origin_vt() -> int:
+    """Identifica o terminal virtual ativo antes da troca de sessão."""
+    active_tty = Path("/sys/class/tty/tty0/active")
+    if active_tty.exists():
+        try:
+            name = active_tty.read_text(encoding="utf-8").strip()
+            if name.startswith("tty") and name[3:].isdigit():
+                return int(name[3:])
+        except OSError:
+            pass
+    res = subprocess.run(["fgconsole"], capture_output=True, text=True, check=False)
+    if res.returncode == 0 and res.stdout.strip().isdigit():
+        return int(res.stdout.strip())
+    return 7
+
+
+def pick_free_x_display(start: int = 80) -> str:
+    for num in range(start, start + 30):
+        if not Path(f"/tmp/.X{num}-lock").exists() and not Path(f"/tmp/.X11-unix/X{num}").exists():
+            return f":{num}"
+    return ":89"
+
+
+def isolated_env(display: str, profile_dir: Path) -> dict[str, str]:
+    """Constrói ambiente isolado removendo acesso ao áudio/sessão D-Bus do usuário principal."""
+    env = dict(os.environ)
+    for var in ("PULSE_SERVER", "PULSE_COOKIE", "PIPEWIRE_REMOTE", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"):
+        env.pop(var, None)
+    env["DISPLAY"] = display
+    env["HOME"] = str(profile_dir)
+    env["XDG_CONFIG_HOME"] = str(profile_dir / "config")
+    env["XDG_DATA_HOME"] = str(profile_dir / "data")
+    env["XDG_RUNTIME_DIR"] = str(profile_dir / "runtime")
+    return env
+
+
+def run_nested_test() -> int:
+    """Executa teste aninhado com Xephyr validando isolamento de DISPLAY, áudio e limpeza."""
+    xephyr_bin = shutil.which("Xephyr")
+    if not xephyr_bin:
+        print("ERRO: Xephyr não encontrado.", file=sys.stderr)
+        return 1
+
+    origin_vt = detect_origin_vt()
+    disp = pick_free_x_display()
+    profile_dir = Path(tempfile.mkdtemp(prefix="mintsec-bank-nested-"))
+    os.chmod(profile_dir, 0o700)
+    for sub in ("config", "data", "runtime"):
+        p = profile_dir / sub
+        p.mkdir(parents=True, exist_ok=True)
+        os.chmod(p, 0o700)
+
+    xephyr = subprocess.Popen(
+        [xephyr_bin, disp, "-screen", "1024x768", "-ac", "-nolisten", "tcp", "-noreset"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.5)
+        if xephyr.poll() is not None:
+            print("ERRO: Xephyr encerrou prematuramente.", file=sys.stderr)
+            return 1
+
+        env = isolated_env(disp, profile_dir)
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, gi; gi.require_version('Gdk','3.0'); "
+                    "from gi.repository import Gdk; "
+                    "d = Gdk.Display.get_default(); "
+                    "assert d is not None and d.get_name() == os.environ['DISPLAY']; "
+                    "assert 'PULSE_SERVER' not in os.environ and 'PIPEWIRE_REMOTE' not in os.environ; "
+                    "print('BANK_NESTED_OK', d.get_name())"
+                ),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        print(f"ORIGIN_VT={origin_vt} {probe.stdout.strip()}")
+    finally:
+        xephyr.terminate()
+        try:
+            xephyr.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            xephyr.kill()
+        shutil.rmtree(profile_dir, ignore_errors=True)
+
+    return 0 if not profile_dir.exists() else 1
+
+
+def launch_production(bank_user: str, bank_vt: int, browser_cmd: list[str]) -> int:
+    """Inicia servidor Xorg separado em VT dedicado garantindo retorno ao VT de origem."""
+    if os.geteuid() != 0:
+        print("Modo produção exige execução privilegiada (Polkit/root).", file=sys.stderr)
+        return 1
+    try:
+        validated_cmd = validate_bank_launch(bank_user, bank_vt, browser_cmd, check_exists=True)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        print(f"Parâmetros inválidos para Modo Banco: {exc}", file=sys.stderr)
+        return 1
+    try:
+        pw = pwd.getpwnam(bank_user)
+    except KeyError:
+        print(f"Conta dedicada '{bank_user}' não encontrada.", file=sys.stderr)
+        return 1
+    if pw.pw_uid == 0:
+        print("Modo Banco recusa execução do navegador com UID 0.", file=sys.stderr)
+        return 1
+
+    origin_vt = detect_origin_vt()
+    disp = pick_free_x_display(10)
+    profile_dir = Path(tempfile.mkdtemp(prefix="mintsec-bank-prod-"))
+    os.chown(profile_dir, pw.pw_uid, pw.pw_gid)
+    os.chmod(profile_dir, 0o700)
+    for sub in ("config", "data", "runtime"):
+        sp = profile_dir / sub
+        sp.mkdir(parents=True, exist_ok=True)
+        os.chown(sp, pw.pw_uid, pw.pw_gid)
+        os.chmod(sp, 0o700)
+
+    xinit_bin = shutil.which("xinit")
+    runuser_bin = shutil.which("runuser")
+    if not xinit_bin or not runuser_bin:
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        print("Utilitários xinit/runuser não encontrados.", file=sys.stderr)
+        return 1
+
+    xauth_file = profile_dir / ".Xauthority"
+    xauth_bin = shutil.which("xauth")
+    xorg_auth_args: list[str] = []
+    if xauth_bin:
+        cookie = secrets.token_hex(16)
+        xauth_file.touch()
+        os.chown(xauth_file, pw.pw_uid, pw.pw_gid)
+        os.chmod(xauth_file, 0o600)
+        subprocess.run(
+            [xauth_bin, "-f", str(xauth_file), "add", disp, ".", cookie],
+            check=True,
+        )
+        os.chown(xauth_file, pw.pw_uid, pw.pw_gid)
+        os.chmod(xauth_file, 0o600)
+        xorg_auth_args = ["-auth", str(xauth_file)]
+
+    try:
+        env = isolated_env(disp, profile_dir)
+        if xorg_auth_args:
+            env["XAUTHORITY"] = str(xauth_file)
+        client_cmd = [runuser_bin, "-u", bank_user, "--", *validated_cmd]
+        cmd = [xinit_bin, *client_cmd, "--", disp, f"vt{bank_vt}", "-nolisten", "tcp", *xorg_auth_args]
+        res = subprocess.run(cmd, env=env, check=False)
+        return res.returncode
+    finally:
+        subprocess.run(["chvt", str(origin_vt)], check=False)
+        shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Lançador experimental do Modo Banco")
+    parser.add_argument("--test-nested", action="store_true", help="Valida isolamento gráfico em Xephyr")
+    parser.add_argument("--user", default="mintsec-bank", help="Conta dedicada")
+    parser.add_argument("--vt", type=int, default=8, help="VT dedicado para o servidor gráfico")
+    parser.add_argument("browser", nargs="*", help="Comando do navegador")
+    args = parser.parse_args(argv)
+
+    if args.test_nested:
+        return run_nested_test()
+    browser_cmd = args.browser or ["/usr/bin/firefox", "--no-remote"]
+    return launch_production(args.user, args.vt, browser_cmd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

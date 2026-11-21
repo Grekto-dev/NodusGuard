@@ -1,0 +1,22 @@
+[Unit]
+Description=Suíte de Segurança Mint — Auxiliar de Rede Wi-Fi Local (ARP/DHCP)
+
+[Service]
+Type=dbus
+BusName=org.mintsecurity.Network
+ExecStart=/usr/bin/mint-security-daemon --module network --idle-exit-secs 30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mint-security-suite
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+MemoryHigh=64M
+Restart=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectControlGroups=yes
+StateDirectory=mint-security-suite
+StateDirectoryMode=0700

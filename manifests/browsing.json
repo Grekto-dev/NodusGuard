@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "module_id": "browsing",
+  "display_name": "Navegação",
+  "short_description": "Filtro DNS local contra phishing, malware e mineração com preservação de VPN.",
+  "phase": "continuous",
+  "experimental": false,
+  "engine": {
+    "name": "Filtro DNS local (H5)",
+    "binaries": ["dnscrypt-proxy"],
+    "candidate_binaries": ["dnscrypt-proxy", "dnsmasq"]
+  },
+  "packages": ["dnscrypt-proxy"],
+  "optional_packages": ["dnsmasq"],
+  "deb_package": "mint-security-suite-browsing",
+  "dbus_bus_name": "org.mintsecurity.Browsing",
+  "dbus_object_path": "/org/mintsecurity/Browsing",
+  "systemd_units": [
+    "mintsec-browsing.service"
+  ],
+  "capabilities": [
+    "CAP_NET_BIND_SERVICE"
+  ],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "add_local_exception",
+    "authorize_domain_resolver"
+  ],
+  "reversible_changes": [
+    "networkmanager_dns_dropin",
+    "dns_local_exceptions"
+  ]
+}

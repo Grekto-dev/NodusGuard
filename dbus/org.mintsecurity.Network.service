@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.mintsecurity.Network
+Exec=/usr/bin/mint-security-daemon --module network --idle-exit-secs 30
+User=root
+SystemdService=mintsec-network.service

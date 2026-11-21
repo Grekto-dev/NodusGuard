@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.mintsecurity.Isolation
+Exec=/usr/bin/mint-security-daemon --module isolation --idle-exit-secs 30
+User=root
+SystemdService=mintsec-isolation.service

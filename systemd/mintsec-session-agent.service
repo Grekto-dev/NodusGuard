@@ -1,0 +1,15 @@
+[Unit]
+Description=Suíte de Segurança Mint — Agente de Sessão (SNI, Notificações e Diálogos)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.mintsecurity.SessionAgent
+ExecStart=/usr/bin/mint-security-agent
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Suíte de Segurança Mint — Inspeção Contínua ClamAV (adesão explícita)
+After=clamav-daemon.service
+ConditionPathExists=/etc/clamav/mintsec-clamonacc.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/clamonacc -F --config-file=/etc/clamav/mintsec-clamonacc.conf
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+MemoryHigh=768M
+Restart=on-failure
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectControlGroups=yes

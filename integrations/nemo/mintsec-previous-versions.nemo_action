@@ -1,0 +1,8 @@
+[Nemo Action]
+Name=Versões anteriores…
+Comment=Abrir versões protegidas em Meus arquivos no NodusGuard
+Exec=mint-security-suite --page recovery --tab files --path=%F
+Icon-Name=security-high
+Selection=s
+Extensions=any
+Quote=double

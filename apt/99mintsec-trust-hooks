@@ -1,0 +1,7 @@
+// Hooks APT da Suíte de Segurança Mint para confiança pós-atualização
+DPkg::Pre-Install-Pkgs {
+    "/usr/bin/mint-security-apt-hook pre-install";
+};
+DPkg::Post-Invoke {
+    "/usr/bin/mint-security-apt-hook post-invoke";
+};

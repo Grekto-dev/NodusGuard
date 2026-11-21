@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.mintsecurity.Browsing
+Exec=/usr/bin/mint-security-daemon --module browsing --idle-exit-secs 30
+User=root
+SystemdService=mintsec-browsing.service

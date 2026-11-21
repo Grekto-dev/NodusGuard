@@ -1,0 +1,10 @@
+Package: {package}
+Version: {version}
+Section: admin
+Priority: optional
+Architecture: {architecture}
+Maintainer: NodusGuard Contributors <https://github.com/Grekto-dev/NodusGuard>
+Depends: {depends}
+Suggests: {suggests}
+Description: {short_description}
+ {long_description}

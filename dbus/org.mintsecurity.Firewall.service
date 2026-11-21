@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.mintsecurity.Firewall
+Exec=/usr/bin/mint-security-daemon --module firewall --idle-exit-secs 30
+User=root
+SystemdService=mintsec-firewall.service

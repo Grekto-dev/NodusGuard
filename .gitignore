@@ -1,0 +1,23 @@
+# Python bytecode and packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Rust build artifacts (keep Cargo.lock tracked)
+agent/target/
+
+# Compiled C binaries
+helpers/mintsec-netmon/mintsec-netmon
+helpers/mintsec-containment/mintsec-containment
+
+# Editors and OS files
+.DS_Store
+*.swp
+*.swo
+.env

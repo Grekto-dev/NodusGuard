@@ -1,0 +1,139 @@
+{
+  "suite_version": "0.1.0",
+  "target_base": "Linux Mint 22.3 (Ubuntu 24.04)",
+  "kernel": "7.0.0-43-generic",
+  "approved_features": [
+    "GTK 3 control panel with SSD, soft lavender / neutral light / dark flat themes, High Contrast CSS omission, and live en/pt_BR switcher",
+    "Rust session agent (SNI tray, grouped D-Bus notifications, and on-demand confirmation dialogs)",
+    "Versioned contracts for 7 modules, optional WAL SQLite event history, and non-retentive Polkit rules",
+    "Unprivileged on-demand and scheduled Antivirus (ClamAV) with confirmed quarantine and collision handling",
+    "Incoming Firewall (UFW) with selective revert + OpenSnitch outbound contract and APT SHA-256 trust cache",
+    "Personal encrypted File Backups (restic), Timeshift snapshots, and out-of-$HOME incident preservation",
+    "Local Safe Browsing DNS filtering (dnsmasq H5 selection) with exceptions and split-VPN domain preservation",
+    "Local Wi-Fi network inventory (NetworkManager + CAP_NET_RAW ARP/DHCP helper)",
+    "Protected Browser via bubblewrap with temporary profiles and X11 threat-model notice",
+    "Frozen-start FAN_OPEN_EXEC_PERM + cgroup.freeze verified in KVM micro-VM (kernel 6.14.0-37-generic)",
+    "Hybrid BIOS + UEFI offline rescue ISO verified in QEMU/KVM with read-only initial mount"
+  ],
+  "experimental_features": [
+    "Bank Mode (verified in nested Xephyr; bare-metal H7 GPU/VT matrix pending for Intel legacy, Nouveau, and modesetting)",
+    "Physical USB rescue boot under signed Secure Boot (pending bare-metal verification)",
+    "External FAN_OPEN_EXEC_PERM frozen start on kernels 6.8 and 7.0 (6.14 verified in KVM)",
+    "Opt-in real-time clamd/clamonacc scanning (pending 2/4 GiB HDD benchmarks in H4)"
+  ],
+  "pending_matrices": [
+    "MATE",
+    "Xfce",
+    "LMDE (Debian base)",
+    "Physical 2/4 GiB HDD"
+  ],
+  "homologation_results": {
+    "H1": {
+      "assay": "H1",
+      "status": "PARTIAL_KVM_6_14_PASS",
+      "kernel": "7.0.0-43-generic",
+      "helper_self_test": "mintsec-containment self-test OK (budget=200ms, FAN_CLOEXEC, cgroup.events, FAN_Q_OVERFLOW)",
+      "spawn_methods": {
+        "fork": {
+          "before_release_markers": 0,
+          "after_release_marker": "H1_MARKER_OK",
+          "ok": true
+        },
+        "vfork": {
+          "before_release_markers": 0,
+          "after_release_marker": "H1_MARKER_OK",
+          "ok": true
+        },
+        "posix_spawn": {
+          "before_release_markers": 0,
+          "after_release_marker": "H1_MARKER_OK",
+          "ok": true
+        }
+      },
+      "containment_policy_gates_ok": true,
+      "kvm_live_kernel_test": {
+        "executed": true,
+        "ok": true,
+        "kernel_version": "6.14.0-37-generic",
+        "mode_measurements": [
+          "H1_MODE_OK mode=fork budget_ms=0 frozen_confirmed=1 reaped_populated_0=1",
+          "H1_MODE_OK mode=vfork budget_ms=0 frozen_confirmed=1 reaped_populated_0=1",
+          "H1_MODE_OK mode=posix_spawn budget_ms=0 frozen_confirmed=1 reaped_populated_0=1"
+        ],
+        "sigkill_recovery_ok": true,
+        "raw_tail": ""
+      },
+      "frozen_start_approved_kernels": [
+        "6.14.0-37-generic"
+      ],
+      "pending_privileged_matrix": "Kernel 6.14.0-37-generic verified live in KVM micro-VM (fork/vfork/posix_spawn, FAN_OPEN_EXEC_PERM, frozen 1, populated 0, SIGKILL). Kernels 6.8 and 7.0 await dedicated privileged hardware runs."
+    },
+    "H2": {
+      "assay": "H2",
+      "status": "PASS_CONTRACT_VERIFIED",
+      "simultaneous_waits_isolated": true,
+      "queue_full_and_busy_recoverable": true,
+      "offline_default_deny_and_monitor_allow": true,
+      "allow_next_attempt_verified": true,
+      "pending_live_opensnitch": "Contract integration verified; live run against opensnitchd daemon requires opensnitch package installation."
+    },
+    "H3": {
+      "assay": "H3",
+      "status": "PASS",
+      "cold_first_hash_ms": 0.092,
+      "hot_cache_p95_ms": 0.588,
+      "hot_cache_max_ms": 0.692,
+      "target_p95_ms": 5.0,
+      "symlink_and_dynamic_rejected": true,
+      "apt_authenticated_aborted_and_external_verified": true
+    },
+    "H4": {
+      "assay": "H4",
+      "status": "PARTIAL_LOCAL_PASS",
+      "agent_pss_kib": 724,
+      "agent_open_fds": 9,
+      "python_controller_pss_kib": 139456,
+      "modular_lifecycle_and_interrupted_incomplete_ok": true,
+      "pending_hardware_matrix": "2/4 GiB physical HDD measurement with initial/incremental restic backup awaits dedicated hardware."
+    },
+    "H5": {
+      "assay": "H5",
+      "status": "PASS",
+      "selected_dns_engine": "dnsmasq (live verified via IPv4/IPv6 dig + split VPN)",
+      "dns_live_block_exception_vpn_reversion_ok": true,
+      "netmon_self_test": "mintsec-netmon self-test OK (ARP + DHCP)",
+      "live_nmcli_interface": "enp4s0",
+      "live_neighbors_observed": 8,
+      "client_isolation_and_home_gate_ok": true
+    },
+    "H6": {
+      "assay": "H6",
+      "status": "PASS",
+      "independent_restore_with_incident_preserve_ok": true,
+      "quarantine_collision_handled": true,
+      "fan_q_overflow_reconstruction_marked_incomplete": true,
+      "beta_false_positive_gate_verified": true
+    },
+    "H7": {
+      "assay": "H7",
+      "status": "EXPERIMENTAL_PENDING_HARDWARE",
+      "host_protected_block_nodes": 9,
+      "luks_lvm_raid_refusal_verified": true,
+      "swapped_media_refused": true,
+      "gpgv_signature_and_byte_readback_verified": true,
+      "qemu_bios_boot_ro_verified": true,
+      "qemu_uefi_boot_ro_verified": true,
+      "bwrap_unprivileged_smoke_ok": true,
+      "bank_mode_nested_xephyr_ok": true,
+      "bank_mode_status": "experimental",
+      "pending_hardware": "Bare-metal signed Secure Boot USB test and physical GPU Bank Mode matrix (legacy Intel, Nouveau, modesetting, audio, VT return) pending dedicated hardware."
+    },
+    "H8": {
+      "assay": "H8",
+      "status": "PASS_XEPHYR_CINNAMON_ENV",
+      "tests_run": 4,
+      "idle_repaints": 0,
+      "pending_desktops": "Visual matrix verified in Xephyr under Mint 22.3; bare-metal MATE and Xfce sessions pending."
+    }
+  }
+}

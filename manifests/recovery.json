@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "module_id": "recovery",
+  "display_name": "Ransomware e cópias",
+  "short_description": "Pontos do sistema com Timeshift, cópias pessoais cifradas com restic e recuperação de incidentes.",
+  "phase": "mvp",
+  "experimental": false,
+  "engine": {
+    "name": "Timeshift + restic",
+    "binaries": ["timeshift", "restic"]
+  },
+  "packages": ["timeshift", "restic"],
+  "optional_packages": [],
+  "deb_package": "mint-security-suite-backup",
+  "dbus_bus_name": "org.mintsecurity.Recovery",
+  "dbus_object_path": "/org/mintsecurity/Recovery",
+  "systemd_units": [
+    "mintsec-recovery.service"
+  ],
+  "capabilities": [
+    "CAP_DAC_READ_SEARCH"
+  ],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "backup_now",
+    "test_restore",
+    "list_snapshots",
+    "restore_files",
+    "cleanup_incident"
+  ],
+  "reversible_changes": [
+    "restic_schedule",
+    "pause_policy_preference"
+  ]
+}

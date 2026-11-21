@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.mintsecurity.Rescue
+Exec=/usr/bin/mint-security-daemon --module rescue --idle-exit-secs 30
+User=root
+SystemdService=mintsec-rescue.service

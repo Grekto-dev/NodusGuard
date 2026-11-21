@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mint-security-suite"
+version = "0.1.0"
+description = "NodusGuard — Clear, transparent, modular security suite for Linux Mint"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-or-later" }
+dependencies = []
+
+[project.scripts]
+mint-security-suite = "mintsec_ui.app:main"
+mint-security-dialog = "mintsec_ui.dialogs.runner:main"
+mint-security-daemon = "mintsec.services.daemon:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

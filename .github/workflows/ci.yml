@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build, Test & Package (.deb)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc make dpkg-dev pkg-config \
+            python3 python3-gi python3-gi-cairo python3-pil python3-dbus \
+            gir1.2-gtk-3.0 gir1.2-atk-1.0 gir1.2-gdkpixbuf-2.0 \
+            xserver-xephyr xvfb dbus-x11 at-spi2-core \
+            adwaita-icon-theme gnome-themes-extra fonts-dejavu-core \
+            ufw bubblewrap
+
+      - name: Allow unprivileged user namespaces for bubblewrap smoke test
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+
+      - name: Build and self-test C11 helpers
+        run: |
+          make helpers
+          ./helpers/mintsec-netmon/mintsec-netmon --self-test
+          ./helpers/mintsec-containment/mintsec-containment --self-test
+
+      - name: Test, lint, and build Rust session agent
+        run: |
+          cargo test --locked --manifest-path agent/Cargo.toml
+          cargo clippy --locked --manifest-path agent/Cargo.toml --all-targets -- -D warnings
+          cargo build --release --locked --manifest-path agent/Cargo.toml
+
+      - name: Run Python and GTK/Xephyr test suite
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" dbus-run-session -- \
+            env PYTHONWARNINGS=default PYTHONPATH=src \
+            python3 -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Build .deb packages and verify checksums
+        run: |
+          python3 scripts/build_debs.py
+          (
+            cd dist
+            sha256sum *.deb > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
+          )
+          dpkg-deb -c dist/mint-security-suite-core_*.deb | grep -E "hicolor|nodusguard\.desktop|mint-security-agent"
+
+      - name: Upload .deb build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodusguard-debs
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

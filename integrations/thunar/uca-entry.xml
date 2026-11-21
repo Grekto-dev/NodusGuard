@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+  <action>
+    <icon>security-high</icon>
+    <name>Versões anteriores…</name>
+    <unique-id>mint-security-suite-previous-versions</unique-id>
+    <command>mint-security-suite --page recovery --tab files --path=%f</command>
+    <description>Abrir versões protegidas em Meus arquivos no NodusGuard</description>
+    <patterns>*</patterns>
+    <directories/>
+    <other-files/>
+    <text-files/>
+    <image-files/>
+    <audio-files/>
+    <video-files/>
+  </action>
+</actions>

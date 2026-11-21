@@ -1,0 +1,20 @@
+[Unit]
+Description=Suíte de Segurança Mint — Varredura agendada ClamAV (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mint-security-daemon --module antimalware --run-schedule %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryHigh=768M
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectControlGroups=yes

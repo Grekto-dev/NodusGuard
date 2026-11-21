@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "module_id": "isolation",
+  "display_name": "Isolamento",
+  "short_description": "Atualizações do Mint, perfis AppArmor, Navegador Isolado (bubblewrap) e Modo Banco experimental.",
+  "phase": "conditional",
+  "experimental": true,
+  "engine": {
+    "name": "AppArmor + bubblewrap",
+    "binaries": ["bwrap", "aa-status"]
+  },
+  "packages": ["bubblewrap", "apparmor-utils"],
+  "optional_packages": ["apparmor-profiles"],
+  "deb_package": "mint-security-suite-isolation",
+  "dbus_bus_name": "org.mintsecurity.Isolation",
+  "dbus_object_path": "/org/mintsecurity/Isolation",
+  "systemd_units": [
+    "mintsec-isolation.service"
+  ],
+  "capabilities": [],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "launch_isolated_browser",
+    "launch_bank_mode"
+  ],
+  "reversible_changes": [
+    "sandbox_profiles"
+  ]
+}

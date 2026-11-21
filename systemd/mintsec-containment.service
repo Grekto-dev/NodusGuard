@@ -1,0 +1,19 @@
+[Unit]
+Description=Suíte de Segurança Mint — Contenção e Monitor fanotify/cgroup (Fase 3 / H1+H6)
+OnFailure=mintsec-containment-recovery.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/mintsec-containment --watch-exec
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+WatchdogSec=5s
+WatchdogSignal=SIGKILL
+Restart=on-failure
+RestartSec=1s
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes

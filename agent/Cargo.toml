@@ -1,0 +1,15 @@
+[package]
+name = "mint-security-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Agente de sessão leve em Rust para SNI, notificações D-Bus e diálogos sob demanda"
+
+[dependencies]
+chrono = { version = "0.4", features = ["clock", "std"] }
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "process"] }
+uuid = { version = "1.26", features = ["v4"] }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }

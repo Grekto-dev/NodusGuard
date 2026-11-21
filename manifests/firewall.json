@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "module_id": "firewall",
+  "display_name": "Firewall",
+  "short_description": "Entrada controlada por UFW e saída por aplicativo integrada com OpenSnitch na fase contínua.",
+  "phase": "mvp",
+  "experimental": false,
+  "engine": {
+    "name": "UFW + OpenSnitch",
+    "binaries": ["ufw"],
+    "continuous_binaries": ["opensnitchd"]
+  },
+  "packages": ["ufw"],
+  "optional_packages": ["opensnitch"],
+  "deb_package": "mint-security-suite-firewall",
+  "dbus_bus_name": "org.mintsecurity.Firewall",
+  "dbus_object_path": "/org/mintsecurity/Firewall",
+  "systemd_units": [
+    "mintsec-firewall.service"
+  ],
+  "capabilities": [
+    "CAP_NET_ADMIN"
+  ],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "preview_essential_rules",
+    "add_rule",
+    "revoke_rule"
+  ],
+  "reversible_changes": [
+    "suite_managed_ufw_rules",
+    "suite_ufw_enabled_state"
+  ]
+}

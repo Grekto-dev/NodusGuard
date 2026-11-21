@@ -1,0 +1,15 @@
+[Unit]
+Description=Suíte de Segurança Mint — Auxiliar Independente de Recuperação pós-falha de contenção
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mint-security-daemon --module recovery --idle-exit-secs 15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectControlGroups=yes

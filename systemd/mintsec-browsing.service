@@ -1,0 +1,22 @@
+[Unit]
+Description=Suíte de Segurança Mint — Filtro DNS Local (Navegação)
+
+[Service]
+Type=dbus
+BusName=org.mintsecurity.Browsing
+ExecStart=/usr/bin/mint-security-daemon --module browsing --idle-exit-secs 30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/NetworkManager/conf.d /var/lib/mint-security-suite
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+MemoryHigh=128M
+Restart=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectControlGroups=yes
+StateDirectory=mint-security-suite
+StateDirectoryMode=0700

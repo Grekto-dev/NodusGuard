@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "module_id": "rescue",
+  "display_name": "Resgate offline",
+  "short_description": "Criação de USB de resgate verificado via UDisks2 com ClamAV, LUKS e restauração restic.",
+  "phase": "conditional",
+  "experimental": true,
+  "engine": {
+    "name": "UDisks2 + imagem live assinada",
+    "binaries": ["udisksctl", "gpgv"]
+  },
+  "packages": ["udisks2", "gpgv"],
+  "optional_packages": ["cryptsetup"],
+  "deb_package": "mint-security-suite-rescue",
+  "dbus_bus_name": "org.mintsecurity.Rescue",
+  "dbus_object_path": "/org/mintsecurity/Rescue",
+  "systemd_units": [
+    "mintsec-rescue.service"
+  ],
+  "capabilities": [],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "inspect_usb_media",
+    "write_rescue_usb"
+  ],
+  "reversible_changes": []
+}

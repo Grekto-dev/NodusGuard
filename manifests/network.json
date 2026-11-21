@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "module_id": "network",
+  "display_name": "Minha rede",
+  "short_description": "Inventário da rede Wi-Fi local com NetworkManager e auxiliar isolado ARP/DHCP.",
+  "phase": "continuous",
+  "experimental": false,
+  "engine": {
+    "name": "NetworkManager + auxiliar ARP/DHCP",
+    "binaries": ["nmcli"]
+  },
+  "packages": ["network-manager"],
+  "optional_packages": [],
+  "deb_package": "mint-security-suite-network",
+  "dbus_bus_name": "org.mintsecurity.Network",
+  "dbus_object_path": "/org/mintsecurity/Network",
+  "systemd_units": [
+    "mintsec-network.service"
+  ],
+  "capabilities": [
+    "CAP_NET_RAW"
+  ],
+  "operations": [
+    "query",
+    "configure",
+    "enable",
+    "disable",
+    "recognize_device",
+    "active_discover"
+  ],
+  "reversible_changes": [
+    "home_network_tags",
+    "known_devices"
+  ]
+}

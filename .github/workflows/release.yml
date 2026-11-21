@@ -1,0 +1,123 @@
+name: Release (.deb)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to release (for example: v0.1.0)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-deb:
+    name: Build & Publish .deb Release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate release tag against package version
+        run: |
+          EXPECTED_VERSION=$(PYTHONPATH=src python3 -c "import mintsec; print(mintsec.__version__)")
+          RAW_TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
+          if [ -z "$RAW_TAG" ]; then
+            RAW_TAG="v${EXPECTED_VERSION}"
+          fi
+          TAG_VERSION="${RAW_TAG#v}"
+          if [ "$TAG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Error: tag version ($TAG_VERSION) does not match mintsec.__version__ ($EXPECTED_VERSION)"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$RAW_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$EXPECTED_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc make dpkg-dev pkg-config \
+            python3 python3-gi python3-gi-cairo python3-pil python3-dbus \
+            gir1.2-gtk-3.0 gir1.2-atk-1.0 gir1.2-gdkpixbuf-2.0 \
+            xserver-xephyr xvfb dbus-x11 at-spi2-core \
+            adwaita-icon-theme gnome-themes-extra fonts-dejavu-core \
+            ufw bubblewrap
+
+      - name: Allow unprivileged user namespaces for bubblewrap smoke test
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+
+      - name: Build and self-test C11 helpers
+        run: |
+          make helpers
+          ./helpers/mintsec-netmon/mintsec-netmon --self-test
+          ./helpers/mintsec-containment/mintsec-containment --self-test
+
+      - name: Test, lint, and build Rust session agent
+        run: |
+          cargo test --locked --manifest-path agent/Cargo.toml
+          cargo clippy --locked --manifest-path agent/Cargo.toml --all-targets -- -D warnings
+          cargo build --release --locked --manifest-path agent/Cargo.toml
+
+      - name: Run full Python and GTK/Xephyr verification suite
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" dbus-run-session -- \
+            env PYTHONWARNINGS=default PYTHONPATH=src \
+            python3 -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Build .deb packages and checksums
+        run: |
+          rm -rf dist
+          python3 scripts/build_debs.py
+          (
+            cd dist
+            sha256sum *.deb > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
+          )
+          ls -lh dist/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: NodusGuard ${{ env.RELEASE_TAG }}
+          generate_release_notes: false
+          files: |
+            dist/*.deb
+            dist/SHA256SUMS.txt
+          body: |
+            ## NodusGuard ${{ env.RELEASE_VERSION }}
+
+            Clear, transparent, modular security suite for Linux Mint 22.x and Ubuntu 24.04 (`amd64`).
+
+            ### Highlights in ${{ env.RELEASE_TAG }}
+            - Unified GTK 3 control panel with native server-side decorations, adaptive light/dark/high-contrast themes, and zero idle repaints
+            - Built-in live language switcher (**English** default + **Brazilian Portuguese**)
+            - Settings **About** tab (`v${{ env.RELEASE_VERSION }}`) with full open-source credits
+            - Multi-size RGBA application icon (`48×48`, `64×64`, `128×128`, `256×256`) and custom flat illustrations
+            - Modular packages for **Antivirus** (ClamAV), **Network Shield** (UFW + OpenSnitch), **File Backups** (restic + Timeshift), **Wi-Fi Network**, **Safe Browsing** (`dnsmasq`), **Protected Browser** (`bubblewrap` + AppArmor), **Emergency USB** (`UDisks2` + `gpgv`), plus **Nemo / Caja / Thunar** context-menu integrations
+
+            ### Installation
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            sudo apt install ./mint-security-suite-core_${{ env.RELEASE_VERSION }}_amd64.deb
+            # Optionally install any modules you need:
+            sudo apt install ./mint-security-suite-antimalware_${{ env.RELEASE_VERSION }}_all.deb \
+                             ./mint-security-suite-firewall_${{ env.RELEASE_VERSION }}_all.deb \
+                             ./mint-security-suite-backup_${{ env.RELEASE_VERSION }}_all.deb
+            ```

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>NodusGuard</vendor>
+  <vendor_url>https://linuxmint.com</vendor_url>
+
+  <action id="org.mintsecurity.suite.query">
+    <description>Consultar estado dos módulos de segurança</description>
+    <message>Autentique para consultar informações dos módulos de segurança.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.module.toggle">
+    <description>Ativar ou desativar módulo de segurança</description>
+    <message>Autentique para alterar o estado de proteção de um módulo.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.firewall.configure">
+    <description>Configurar regras e estado do firewall UFW</description>
+    <message>Autentique para aplicar configurações de entrada do firewall.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.antimalware.update-db">
+    <description>Atualizar assinaturas de antivírus com FreshClam</description>
+    <message>Autentique para atualizar a base de assinaturas do ClamAV.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Ações destrutivas: autorização SEM retenção (auth_admin) -->
+  <action id="org.mintsecurity.recovery.overwrite">
+    <description>Sobrescrever arquivos ou restaurar sistema em modo administrativo</description>
+    <message>Esta operação sobrescreverá dados existentes. Autentique novamente para confirmar.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.quarantine.delete">
+    <description>Excluir permanentemente item em quarentena</description>
+    <message>Esta operação apagará o item em quarentena permanentemente. Autentique para confirmar.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.rescue.write-usb">
+    <description>Apagar e gravar imagem de resgate em mídia USB</description>
+    <message>Esta operação apagará todos os dados da mídia USB selecionada. Autentique para confirmar.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.firewall.reset">
+    <description>Redefinir regras administrativas do firewall</description>
+    <message>Esta operação removerá regras administrativas selecionadas. Autentique para confirmar.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.mintsecurity.isolation.bank-mode">
+    <description>Iniciar Modo Banco em sessão e conta separadas</description>
+    <message>Autentique para iniciar o servidor gráfico separado do Modo Banco.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
