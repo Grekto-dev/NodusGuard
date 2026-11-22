@@ -11,7 +11,7 @@ import gi
 gi.require_version("Gdk", "3.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from mintsec_ui.i18n import get_language, tr  # noqa: E402
 
@@ -72,10 +72,16 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
         self._blend_red: float = 0.0
         self._high_contrast: bool = False
         self._active_page: bool = True
+        self._window_minimized: bool = False
         self._phase: float = 0.0
         self._last_tick: float = time.monotonic()
         self._timer_id: int | None = None
+        self._timer_interval_ms: int = 0
         self._settings_sig: int | None = None
+        self._toplevel_win: Gtk.Widget | None = None
+        self._win_state_sig: int | None = None
+        self._glow_cache_key: tuple[int, int, float] | None = None
+        self._glow_cache_surface: cairo.ImageSurface | None = None
 
         self.set_size_request(210, 178)
         self.set_valign(Gtk.Align.CENTER)
@@ -84,14 +90,51 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
         self.connect("draw", self._on_draw)
         self.connect("map", lambda *_: self._sync_timer())
         self.connect("unmap", lambda *_: self._stop_timer())
+        self.connect("hierarchy-changed", self._on_hierarchy_changed)
         self.connect("destroy", self._on_destroy)
 
         settings = Gtk.Settings.get_default()
         if settings is not None:
             self._settings_sig = settings.connect("notify::gtk-enable-animations", lambda *_: self._on_anim_pref_changed())
 
+    def _disconnect_toplevel_state(self) -> None:
+        if self._toplevel_win is not None and self._win_state_sig is not None:
+            try:
+                self._toplevel_win.disconnect(self._win_state_sig)
+            except Exception:
+                pass
+        self._toplevel_win = None
+        self._win_state_sig = None
+
+    def _on_hierarchy_changed(self, *_args: object) -> None:
+        top = self.get_toplevel()
+        win = top if isinstance(top, Gtk.Window) else None
+        if win is self._toplevel_win:
+            return
+        self._disconnect_toplevel_state()
+        if win is not None:
+            self._toplevel_win = win
+            self._win_state_sig = win.connect("window-state-event", self._on_window_state_event)
+            gdk_win = win.get_window()
+            if gdk_win is not None:
+                st = gdk_win.get_state()
+                self._window_minimized = bool(st & (Gdk.WindowState.ICONIFIED | Gdk.WindowState.WITHDRAWN))
+        self._sync_timer()
+
+    def _on_window_state_event(self, _widget: Gtk.Widget, event: Gdk.EventWindowState) -> bool:
+        minimized = bool(
+            event.new_window_state & (Gdk.WindowState.ICONIFIED | Gdk.WindowState.WITHDRAWN)
+        )
+        if self._window_minimized != minimized:
+            self._window_minimized = minimized
+            self._sync_timer()
+        return False
+
     def _on_destroy(self, *_args: object) -> None:
         self._stop_timer()
+        self._disconnect_toplevel_state()
+        self._glow_cache_surface = None
+        self._glow_cache_key = None
         settings = Gtk.Settings.get_default()
         if settings is not None and self._settings_sig is not None:
             try:
@@ -134,21 +177,30 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
         if not _animations_enabled():
             self._blend_red = target
         if changed:
+            self._sync_timer()
             self.queue_draw()
 
     def _should_animate(self) -> bool:
         return (
             self._active_page
             and self.get_mapped()
+            and not self._window_minimized
             and not self._high_contrast
             and _animations_enabled()
         )
 
+    def _desired_interval_ms(self) -> int:
+        # 20 FPS durante transição de cor verde <-> vermelho; 15 FPS em respiração contínua
+        return 50 if abs(self._blend_red - self._target_red) > 0.004 else 66
+
     def _sync_timer(self) -> None:
         if self._should_animate():
-            if self._timer_id is None:
+            desired = self._desired_interval_ms()
+            if self._timer_id is None or self._timer_interval_ms != desired:
+                self._stop_timer()
                 self._last_tick = time.monotonic()
-                self._timer_id = GLib.timeout_add(40, self._on_tick)
+                self._timer_interval_ms = desired
+                self._timer_id = GLib.timeout_add(desired, self._on_tick)
         else:
             self._stop_timer()
 
@@ -156,10 +208,12 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
         if self._timer_id is not None:
             GLib.source_remove(self._timer_id)
             self._timer_id = None
+        self._timer_interval_ms = 0
 
     def _on_tick(self) -> bool:
         if not self._should_animate():
             self._timer_id = None
+            self._timer_interval_ms = 0
             return False
         now = time.monotonic()
         dt = min(0.1, max(0.0, now - self._last_tick))
@@ -174,9 +228,34 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
             self._blend_red = _lerp(self._blend_red, self._target_red, step)
         else:
             self._blend_red = self._target_red
+            if self._timer_interval_ms == 50:
+                self._sync_timer()
 
         self.queue_draw()
         return True
+
+    def _get_glow_surface(self, w: int, h: int, t: float) -> cairo.ImageSurface:
+        quant_t = round(t, 2)
+        glow_key = (w, h, quant_t)
+        if self._glow_cache_key != glow_key or self._glow_cache_surface is None:
+            surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+            gctx = cairo.Context(surf)
+            gr = _lerp(self._GREEN_RGB[0], self._RED_RGB[0], quant_t)
+            gg = _lerp(self._GREEN_RGB[1], self._RED_RGB[1], quant_t)
+            gb = _lerp(self._GREEN_RGB[2], self._RED_RGB[2], quant_t)
+            cx = w * 0.5
+            cy = h * 0.5
+            glow_r = min(w, h) * 0.49
+            grad = cairo.RadialGradient(cx, cy, glow_r * 0.08, cx, cy, glow_r)
+            grad.add_color_stop_rgba(0.0, gr, gg, gb, 0.24)
+            grad.add_color_stop_rgba(0.58, gr, gg, gb, 0.09)
+            grad.add_color_stop_rgba(1.0, gr, gg, gb, 0.0)
+            gctx.set_source(grad)
+            gctx.arc(cx, cy, glow_r, 0.0, math.tau)
+            gctx.fill()
+            self._glow_cache_surface = surf
+            self._glow_cache_key = glow_key
+        return self._glow_cache_surface
 
     def _on_draw(self, _widget: Gtk.Widget, ctx: cairo.Context) -> bool:
         alloc = self.get_allocation()
@@ -194,15 +273,9 @@ class ProtectionStatusCanvas(Gtk.DrawingArea):
         anim_on = _animations_enabled() and not self._high_contrast
         phase = self._phase if anim_on else 0.18
 
-        # 1. Brilho radial sereno de fundo
-        glow_r = min_dim * 0.49
-        grad = cairo.RadialGradient(cx, cy, glow_r * 0.08, cx, cy, glow_r)
-        grad.add_color_stop_rgba(0.0, r, g, b, 0.24)
-        grad.add_color_stop_rgba(0.58, r, g, b, 0.09)
-        grad.add_color_stop_rgba(1.0, r, g, b, 0.0)
-        ctx.set_source(grad)
-        ctx.arc(cx, cy, glow_r, 0.0, math.tau)
-        ctx.fill()
+        # 1. Brilho radial em superfície cacheada (zero alocação de gradiente no idle)
+        ctx.set_source_surface(self._get_glow_surface(w, h, t), 0.0, 0.0)
+        ctx.paint()
 
         # 2. Três anéis concêntricos com expansão e fade suaves
         shield_r = min_dim * 0.26

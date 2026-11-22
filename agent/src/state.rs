@@ -122,8 +122,26 @@ impl StateStore {
     }
 
     pub fn load(&self) -> Result<PendingFile, StateError> {
-        if !self.path.exists() {
-            return Ok(PendingFile::default());
+        let meta = match fs::symlink_metadata(&self.path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PendingFile::default());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Caminho de pendências inválido ou symlink",
+            )
+            .into());
+        }
+        if meta.len() > 4 * 1024 * 1024 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Arquivo de pendências excede o limite de 4 MiB",
+            )
+            .into());
         }
         let raw = fs::read_to_string(&self.path)?;
         if raw.trim().is_empty() {
@@ -134,8 +152,26 @@ impl StateStore {
 
     pub fn save(&self, file: &PendingFile) -> Result<(), StateError> {
         if let Some(parent) = self.path.parent() {
+            if let Ok(pm) = fs::symlink_metadata(parent) {
+                if pm.file_type().is_symlink() || !pm.is_dir() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Diretório de estado inválido ou symlink",
+                    )
+                    .into());
+                }
+            }
             fs::create_dir_all(parent)?;
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
+        if let Ok(target_meta) = fs::symlink_metadata(&self.path) {
+            if target_meta.file_type().is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Recusado gravar em symlink de pendências",
+                )
+                .into());
+            }
         }
         let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp_name = format!(".pending.{}.{}.tmp", std::process::id(), seq);

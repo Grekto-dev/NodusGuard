@@ -70,7 +70,8 @@ class QuarantinePage(Gtk.Box):
         self.scans_btn.set_label(tr("quar_page.btn_open_scans"))
         set_accessible(self.scans_btn, tr("quar_page.btn_open_scans"))
         self._last_sig = None
-        self.refresh()
+        if self.get_mapped():
+            self.refresh()
 
     def _build_item_card(self, item: Any) -> Gtk.Box:
         name = Path(item.original_path).name

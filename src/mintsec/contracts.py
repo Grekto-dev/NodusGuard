@@ -91,12 +91,26 @@ def atomic_write_json(path: Path, payload: Any, mode: int = 0o600) -> None:
     atomic_write_text(path, serialized, mode=mode)
 
 
+_MAX_JSON_BYTES = 16 * 1024 * 1024
+
+
 def read_json_safe(path: Path, default: Any) -> Any:
-    """Lê JSON retornando default quando o arquivo não existir."""
-    if not path.exists():
+    """Lê JSON com proteção contra symlink, tamanho excessivo e arquivo corrompido."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
         return default
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    if stat.S_ISLNK(st.st_mode):
+        raise PermissionError(f"Arquivo JSON não pode ser symlink: {path}")
+    if not stat.S_ISREG(st.st_mode):
+        raise PermissionError(f"Caminho esperado como arquivo regular inválido: {path}")
+    if st.st_size > _MAX_JSON_BYTES:
+        raise ValueError(f"Arquivo JSON excede o limite de segurança (16 MiB): {path}")
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return default
 
 
 @dataclass(frozen=True)

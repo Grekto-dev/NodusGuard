@@ -5,6 +5,26 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-22
+
+### Added
+- **Home Protection Hero Animation & Recommendations**:
+  - Added an ultra-light vector Cairo hero animation (`ProtectionStatusCanvas`) switching smoothly between emerald green (healthy) and alert red (issues/paused), with cached radial glow surfaces and automatic pause when off-page, minimized, hidden, or in high contrast.
+  - Added Last Scan & Virus Database status chips, quick **Update DB** button, and actionable protection recommendations with **Ignore** and **Restore ignored** controls.
+- **System Tray Icon & Pause Protection Popup**:
+  - Added status-reactive tray icons (`ok`, `alert`, `paused`) via `XApp.StatusIcon` (with `AyatanaAppIndicator3` fallback), where left-clicking always opens the **Home** page and right-clicking opens the full tray menu (`NodusGuard`, `Pause Protection…`, conditional `Resume Protection`, `Settings`, `Enable Do Not Disturb`, `Game Mode`, `About`, `Quit`).
+  - Added `PauseProtectionDialog` offering timed pauses (`1 minute`, `3 minutes`, `5 minutes`, `15 minutes`, `30 minutes`, `1 hour`, `3 hours`, `5 hours`), **Pause until application restart**, and **Pause**.
+- **Full System Scan, Live % & ETA Progress, Quarantine & Notifications**:
+  - Added **Full system scan** (`scope="system"`, excluding virtual mounts) alongside live scan progress bars, `%` counters, and smoothed ETA across all scans.
+  - Added dedicated **Quarantine** and **Notifications** pages, moving the notification bell counter to the left of **Settings** at the bottom of the sidebar.
+- **Autostart & Periodic Automation Defaults**:
+  - Enabled autostart (`--minimized` via XDG `.desktop`) and daily automatic quick scans + DB updates by default, configurable in **Settings**.
+
+### Security & Performance
+- Hardened JSON state/config readers against symlinks (including broken symlinks), oversized payloads, and corrupted files.
+- Enforced thread-safe locking (`RLock`), config field sanitization, symlink rejection in XDG autostart management, capped error lists on system scans, companion `.service` units honoring pause/Game Mode schedules, and notification popup suppression in Rust session agent during DND/Game Mode/Pause (while keeping critical `paused_app` alerts active).
+- Added granular sub-signatures on Home, lazy hidden-page rendering, pixbuf cache trimming + GC on minimize-to-tray, non-allocating `PendingStore.count_open()`, and mtime/WAL-aware caching in `HistoryStore`.
+
 ## [0.1.0] - 2026-11-21
 
 ### Added

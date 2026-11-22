@@ -155,7 +155,15 @@ class PendingStore:
             return None
 
     def count_open(self) -> int:
-        """Conta pendências ainda sem decisão final."""
+        """Conta pendências abertas sem alocar objetos PendingDecision em hit de cache."""
+        with self._lock:
+            sig = self._file_sig()
+            if sig is None:
+                self._cached_sig = None
+                self._cached_items = None
+                return 0
+            if self._cached_sig == sig and self._cached_items is not None:
+                return sum(1 for item in self._cached_items if item.get("status", "open") == "open")
         return len(self.list_open())
 
     def group_by_app(self) -> dict[str, list[PendingDecision]]:

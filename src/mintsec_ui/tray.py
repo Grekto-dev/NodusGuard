@@ -60,6 +60,7 @@ class NodusGuardTray:
         self._last_dnd = False
         self._last_game_mode = False
         self._last_rec_count = 0
+        self._last_emitted_sig: tuple[str, str, str, str] | None = None
 
         self.menu = Gtk.Menu()
         self.item_open = Gtk.MenuItem(label=tr("tray.open"))
@@ -136,7 +137,7 @@ class NodusGuardTray:
             icon = XApp.StatusIcon()
             icon.set_name("NodusGuard")
             icon.set_secondary_menu(self.menu)
-            icon.connect("activate", lambda *_args: self._on_open())
+            icon.connect("activate", self._on_xapp_activate)
             icon.set_visible(True)
         except Exception as exc:  # noqa: BLE001 - falha não fatal de D-Bus/tray
             _log.debug("Failed to initialize XApp.StatusIcon: %s", exc)
@@ -163,6 +164,8 @@ class NodusGuardTray:
             if _ASSETS_DIR.is_dir():
                 indicator.set_icon_theme_path(str(_ASSETS_DIR))
             indicator.set_menu(self.menu)
+            if hasattr(indicator, "set_secondary_activate_target"):
+                indicator.set_secondary_activate_target(self.item_open)
             indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
         except Exception as exc:  # noqa: BLE001 - falha não fatal de D-Bus/tray
             _log.debug("Failed to initialize AyatanaAppIndicator3: %s", exc)
@@ -176,6 +179,10 @@ class NodusGuardTray:
     def has_active_backend(self) -> bool:
         """Indica se há backend de bandeja ativo para ocultação ao fechar."""
         return self.active_backend in {"xapp", "ayatana"}
+
+    def _on_xapp_activate(self, _icon: object = None, button: int = 1, _time: int = 0) -> None:
+        if int(button) in (0, 1):
+            self._on_open()
 
     def _handle_dnd_toggled(self, item: Gtk.CheckMenuItem) -> None:
         if self._syncing:
@@ -249,6 +256,10 @@ class NodusGuardTray:
 
         tooltip = self._build_tooltip(health, rec_count)
         icon_path, icon_name = self._resolve_icon_target(health)
+        emit_sig = (health, icon_path, icon_name, tooltip)
+        if emit_sig == self._last_emitted_sig:
+            return
+        self._last_emitted_sig = emit_sig
 
         if self._xapp_icon is not None:
             self._xapp_icon.set_icon_name(icon_path)

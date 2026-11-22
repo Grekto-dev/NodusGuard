@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import sys
 
 import gi
@@ -13,7 +14,7 @@ from gi.repository import Gio, Gtk  # noqa: E402
 
 from mintsec.services.catalog import SuiteController  # noqa: E402
 from mintsec_ui.i18n import set_language, tr  # noqa: E402
-from mintsec_ui.widgets import install_app_icon  # noqa: E402
+from mintsec_ui.widgets import install_app_icon, trim_pixbuf_cache  # noqa: E402
 from mintsec_ui.window import SuiteWindow  # noqa: E402
 
 
@@ -54,6 +55,8 @@ class SecuritySuiteApp(Gtk.Application):
         if self.start_minimized and self.window.tray.has_active_backend:
             self.window.hide()
             self.window.home_page.set_animations_active(False)
+            trim_pixbuf_cache()
+            gc.collect()
             return
         self.window.present()
 

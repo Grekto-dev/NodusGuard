@@ -51,7 +51,10 @@ class HomePage(Gtk.Box):
         self.app_window = app_window
         self.set_margin_top(2)
         self.set_margin_bottom(14)
-        self._last_render_sig: tuple[Any, ...] | None = None
+        self._last_recs_sig: tuple[Any, ...] | None = None
+        self._last_cards_sig: tuple[Any, ...] | None = None
+        self._last_coverage_sig: tuple[Any, ...] | None = None
+        self._last_bottom_sig: tuple[Any, ...] | None = None
         self._cta_action: str | None = None
         self._cta_target: str | None = None
 
@@ -173,6 +176,30 @@ class HomePage(Gtk.Box):
         self.in_use_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.in_use_card.get_style_context().add_class("mintsec-list-card")
         self.bottom_box.pack_start(self.in_use_card, True, True, 0)
+
+    @property
+    def _last_render_sig(self) -> tuple[Any, ...] | None:
+        if None in (
+            self._last_recs_sig,
+            self._last_cards_sig,
+            self._last_coverage_sig,
+            self._last_bottom_sig,
+        ):
+            return None
+        return (
+            self._last_recs_sig,
+            self._last_cards_sig,
+            self._last_coverage_sig,
+            self._last_bottom_sig,
+        )
+
+    @_last_render_sig.setter
+    def _last_render_sig(self, value: Any) -> None:
+        if value is None:
+            self._last_recs_sig = None
+            self._last_cards_sig = None
+            self._last_coverage_sig = None
+            self._last_bottom_sig = None
 
     def _make_meta_chip(self, icon_name: str) -> tuple[Gtk.Box, Gtk.Label]:
         pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -397,116 +424,129 @@ class HomePage(Gtk.Box):
         self.primary_cta_btn.show()
 
         events = controller.history_store.query(limit=3) if cfg.history_enabled else []
-        render_sig = (
-            cfg.first_run_completed,
-            cfg.history_enabled,
+
+        recs_sig = (
             cfg.language,
-            health,
-            cfg.protection_paused,
-            cfg.protection_pause_mode,
-            cfg.protection_paused_until,
             tuple(cfg.ignored_recommendations),
-            last_scan_ts,
-            db_updated_ts,
-            tuple((r["rec_id"], r.get("count")) for r in recs),
+            bool(last_scan_ts),
+            tuple((r["rec_id"], r.get("count"), r.get("until")) for r in recs),
+        )
+        if recs_sig != self._last_recs_sig:
+            self._last_recs_sig = recs_sig
+            self._populate_recommendations(
+                recs,
+                has_last_scan=bool(last_scan_ts),
+                ignored_count=len(cfg.ignored_recommendations),
+            )
+
+        cards_sig = (
+            cfg.language,
+            cfg.first_run_completed,
+            tuple(
+                (mid, st.state.value, st.needs_setup)
+                for mid, st in statuses.items()
+                if mid in ("antimalware", "recovery", "network", "isolation")
+            ),
+        )
+        if cards_sig != self._last_cards_sig:
+            self._last_cards_sig = cards_sig
+            clear_container(self.cards_box)
+            for card in controller.home_cards(statuses=statuses):
+                self.cards_box.pack_start(self._make_quick_card_button(card), True, True, 0)
+
+        coverage_sig = (
+            cfg.language,
             tuple((mid, st.state.value, st.needs_setup) for mid, st in statuses.items()),
+        )
+        if coverage_sig != self._last_coverage_sig:
+            self._last_coverage_sig = coverage_sig
+            clear_container(self.coverage_flow)
+            items = list(statuses.items())
+            for idx, (mod_id, st) in enumerate(items):
+                if idx > 0:
+                    sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                    sep.get_style_context().add_class("mintsec-divider")
+                    self.coverage_flow.pack_start(sep, False, False, 0)
+
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                row.set_margin_top(8)
+                row.set_margin_bottom(8)
+
+                friendly_name = friendly_module_name(mod_id, st.display_name)
+                ic = Gtk.Image.new_from_icon_name(MODULE_ICONS.get(mod_id, "security-high-symbolic"), Gtk.IconSize.MENU)
+                ic.set_pixel_size(16)
+                ic.get_style_context().add_class("mintsec-muted")
+
+                name_lbl = Gtk.Label(label=friendly_name, xalign=0.0)
+                name_lbl.set_width_chars(20)
+                name_lbl.get_style_context().add_class("mintsec-subtitle")
+
+                state_txt = friendly_state_text(mod_id, st)
+                mode_lbl = Gtk.Label(label=state_txt, xalign=0.0)
+                mode_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+                mode_lbl.get_style_context().add_class("mintsec-muted")
+
+                row.pack_start(ic, False, False, 0)
+                row.pack_start(name_lbl, False, False, 0)
+                row.pack_start(mode_lbl, True, True, 0)
+
+                if st.state == ModuleState.AUSENTE:
+                    inst_btn = Gtk.Button(label=tr("common.install"))
+                    inst_btn.set_valign(Gtk.Align.CENTER)
+                    set_accessible(
+                        inst_btn,
+                        tr("home.install_a11y", name=friendly_name),
+                        tr("home.install_desc", name=friendly_name),
+                    )
+                    inst_btn.connect("clicked", lambda _b, mid=mod_id: trigger_module_install(self.app_window, mid))
+                    row.pack_start(inst_btn, False, False, 0)
+                elif mod_id == "recovery" and st.needs_setup:
+                    cfg_btn = Gtk.Button(label=tr("common.configure"))
+                    cfg_btn.set_valign(Gtk.Align.CENTER)
+                    set_accessible(
+                        cfg_btn,
+                        tr("home.configure_a11y", name=friendly_name),
+                        tr("home.configure_desc"),
+                    )
+                    cfg_btn.connect("clicked", lambda _b: self.app_window.navigate_to("recovery", tab="files"))
+                    row.pack_start(cfg_btn, False, False, 0)
+                else:
+                    sw = Gtk.Switch()
+                    sw.set_valign(Gtk.Align.CENTER)
+                    sw.set_active(st.state == ModuleState.ATIVO)
+                    set_accessible(
+                        sw,
+                        tr("home.toggle_a11y", name=friendly_name),
+                        tr("home.toggle_desc", name=friendly_name, state=state_txt),
+                    )
+                    sw.connect(
+                        "state-set",
+                        lambda _sw, active, mid=mod_id: handle_module_switch(self.app_window, mid, bool(active)),
+                    )
+                    row.pack_start(sw, False, False, 0)
+
+                    opt_btn = Gtk.Button(label=tr("common.options"))
+                    opt_btn.get_style_context().add_class("mintsec-ghost-btn")
+                    set_accessible(
+                        opt_btn,
+                        tr("home.options_a11y", name=friendly_name),
+                        tr("home.options_desc", name=friendly_name),
+                    )
+                    opt_btn.connect("clicked", lambda _b, mid=mod_id: self.app_window.open_module_detail(mid))
+                    row.pack_start(opt_btn, False, False, 0)
+
+                row.show_all()
+                self.coverage_flow.pack_start(row, False, False, 0)
+
+        bottom_sig = (
+            cfg.language,
+            cfg.history_enabled,
+            tuple((mid, st.state.value) for mid, st in statuses.items()),
             tuple((ev.event_id, ev.action) for ev in events),
         )
-        if render_sig == self._last_render_sig:
-            return
-        self._last_render_sig = render_sig
-
-        self._populate_recommendations(
-            recs,
-            has_last_scan=bool(last_scan_ts),
-            ignored_count=len(cfg.ignored_recommendations),
-        )
-
-        # 3 cartões principais
-        clear_container(self.cards_box)
-        for card in controller.home_cards(statuses=statuses):
-            self.cards_box.pack_start(self._make_quick_card_button(card), True, True, 0)
-
-        # Lista minimalista com interruptor direto
-        clear_container(self.coverage_flow)
-        items = list(statuses.items())
-        for idx, (mod_id, st) in enumerate(items):
-            if idx > 0:
-                sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-                sep.get_style_context().add_class("mintsec-divider")
-                self.coverage_flow.pack_start(sep, False, False, 0)
-
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            row.set_margin_top(8)
-            row.set_margin_bottom(8)
-
-            friendly_name = friendly_module_name(mod_id, st.display_name)
-            ic = Gtk.Image.new_from_icon_name(MODULE_ICONS.get(mod_id, "security-high-symbolic"), Gtk.IconSize.MENU)
-            ic.set_pixel_size(16)
-            ic.get_style_context().add_class("mintsec-muted")
-
-            name_lbl = Gtk.Label(label=friendly_name, xalign=0.0)
-            name_lbl.set_width_chars(20)
-            name_lbl.get_style_context().add_class("mintsec-subtitle")
-
-            state_txt = friendly_state_text(mod_id, st)
-            mode_lbl = Gtk.Label(label=state_txt, xalign=0.0)
-            mode_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            mode_lbl.get_style_context().add_class("mintsec-muted")
-
-            row.pack_start(ic, False, False, 0)
-            row.pack_start(name_lbl, False, False, 0)
-            row.pack_start(mode_lbl, True, True, 0)
-
-            if st.state == ModuleState.AUSENTE:
-                inst_btn = Gtk.Button(label=tr("common.install"))
-                inst_btn.set_valign(Gtk.Align.CENTER)
-                set_accessible(
-                    inst_btn,
-                    tr("home.install_a11y", name=friendly_name),
-                    tr("home.install_desc", name=friendly_name),
-                )
-                inst_btn.connect("clicked", lambda _b, mid=mod_id: trigger_module_install(self.app_window, mid))
-                row.pack_start(inst_btn, False, False, 0)
-            elif mod_id == "recovery" and st.needs_setup:
-                cfg_btn = Gtk.Button(label=tr("common.configure"))
-                cfg_btn.set_valign(Gtk.Align.CENTER)
-                set_accessible(
-                    cfg_btn,
-                    tr("home.configure_a11y", name=friendly_name),
-                    tr("home.configure_desc"),
-                )
-                cfg_btn.connect("clicked", lambda _b: self.app_window.navigate_to("recovery", tab="files"))
-                row.pack_start(cfg_btn, False, False, 0)
-            else:
-                sw = Gtk.Switch()
-                sw.set_valign(Gtk.Align.CENTER)
-                sw.set_active(st.state == ModuleState.ATIVO)
-                set_accessible(
-                    sw,
-                    tr("home.toggle_a11y", name=friendly_name),
-                    tr("home.toggle_desc", name=friendly_name, state=state_txt),
-                )
-                sw.connect(
-                    "state-set",
-                    lambda _sw, active, mid=mod_id: handle_module_switch(self.app_window, mid, bool(active)),
-                )
-                row.pack_start(sw, False, False, 0)
-
-                opt_btn = Gtk.Button(label=tr("common.options"))
-                opt_btn.get_style_context().add_class("mintsec-ghost-btn")
-                set_accessible(
-                    opt_btn,
-                    tr("home.options_a11y", name=friendly_name),
-                    tr("home.options_desc", name=friendly_name),
-                )
-                opt_btn.connect("clicked", lambda _b, mid=mod_id: self.app_window.open_module_detail(mid))
-                row.pack_start(opt_btn, False, False, 0)
-
-            row.show_all()
-            self.coverage_flow.pack_start(row, False, False, 0)
-
-        self._populate_bottom_cards(statuses, cfg, events)
+        if bottom_sig != self._last_bottom_sig:
+            self._last_bottom_sig = bottom_sig
+            self._populate_bottom_cards(statuses, cfg, events)
 
     def _make_quick_card_button(self, card: dict[str, str]) -> Gtk.Button:
         btn = Gtk.Button()

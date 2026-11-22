@@ -217,6 +217,7 @@ class I18nAndAboutTests(unittest.TestCase):
             )
             env = dict(os.environ)
             env["DISPLAY"] = disp
+            env["MINTSEC_DISABLE_TRAY"] = "1"
             env["PYTHONPATH"] = str(repo_root / "src")
             res = subprocess.run(
                 [sys.executable, "-c", script],

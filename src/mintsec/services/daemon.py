@@ -177,7 +177,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SQLite history journal_mode={mode}")
         return 0
     if args.run_schedule:
-        result = controller.antimalware.run_scan(scope="quick")
+        cfg = controller.config_store.load()
+        if cfg.is_protection_paused_now():
+            print(json.dumps({"skipped": True, "reason": "protection_paused"}, ensure_ascii=False))
+            return 0
+        if cfg.game_mode:
+            print(json.dumps({"skipped": True, "reason": "game_mode"}, ensure_ascii=False))
+            return 0
+        schedules = controller.antimalware.list_schedules()
+        sched = next((s for s in schedules if s.get("schedule_id") == args.run_schedule), None)
+        if sched is None or not sched.get("active", True):
+            print(json.dumps({"skipped": True, "reason": "schedule_missing_or_inactive"}, ensure_ascii=False))
+            return 0
+        result = controller.antimalware.run_scan(
+            scope=str(sched["scope"]),
+            paths=sched.get("paths") or None,
+        )
         print(json.dumps(result.to_dict(), ensure_ascii=False))
         return 0
     if not args.module:

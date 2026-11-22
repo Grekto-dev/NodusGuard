@@ -17,6 +17,10 @@ def get_autostart_file(config_home: Path | None = None) -> Path:
 def sync_autostart(enabled: bool, *, config_home: Path | None = None) -> Path:
     """Cria ou remove a entrada XDG de inicialização automática com o sistema."""
     target = get_autostart_file(config_home=config_home)
+    if target.parent.is_symlink():
+        raise PermissionError(f"Diretório de autostart não pode ser symlink: {target.parent}")
+    if target.is_symlink():
+        raise PermissionError(f"Arquivo de autostart não pode ser symlink: {target}")
     if not enabled:
         try:
             target.unlink(missing_ok=True)

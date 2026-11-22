@@ -139,6 +139,15 @@ def load_pixbuf(filename: str, size: int) -> GdkPixbuf.Pixbuf | None:
     return pix
 
 
+def trim_pixbuf_cache(*, max_size: int = 64) -> int:
+    """Remove ilustrações grandes do cache em memória ao minimizar na bandeja."""
+    evicted = 0
+    for key in [k for k in _PIXBUF_CACHE if k[1] > max_size]:
+        _PIXBUF_CACHE.pop(key, None)
+        evicted += 1
+    return evicted
+
+
 def make_illustration(
     filename: str,
     size: int,

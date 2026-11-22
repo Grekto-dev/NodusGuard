@@ -119,9 +119,11 @@ class ProductionWiringTests(unittest.TestCase):
                 rescue.open_device_exclusive_udisks2(device_path="/dev/sde", expected_identity=cand)
 
     def test_built_core_deb_contains_maintainer_scripts_and_all_dbus_services(self) -> None:
+        from mintsec import __version__
+
         repo_root = Path(__file__).resolve().parents[1]
         subprocess.run(["python3", str(repo_root / "scripts/build_debs.py")], check=True, stdout=subprocess.DEVNULL)
-        core_deb = repo_root / "dist/mint-security-suite-core_0.1.0_amd64.deb"
+        core_deb = repo_root / f"dist/mint-security-suite-core_{__version__}_amd64.deb"
         self.assertTrue(core_deb.is_file())
 
         ctrl_dir = self.root / "ctrl"

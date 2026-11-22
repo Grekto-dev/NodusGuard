@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from mintsec.contracts import EventRecord, xdg_dir
 from mintsec.formatting import now_iso
@@ -21,8 +22,29 @@ class HistoryStore:
         self.path = path or (xdg_dir("XDG_DATA_HOME", ".local/share") / "history.db")
         self.enabled = enabled
         self._schema_initialized = False
+        self._lock = threading.RLock()
+        self._query_cache_sig: tuple[int, int, int, int] | None = None
+        self._query_cache: dict[tuple[Any, ...], tuple[EventRecord, ...]] = {}
         if self.enabled:
             self._ensure_schema()
+
+    def _db_sig(self) -> tuple[int, int, int, int] | None:
+        try:
+            db_st = self.path.stat()
+        except OSError:
+            return None
+        wal_path = Path(f"{self.path}-wal")
+        try:
+            wal_st = wal_path.stat()
+            wal_sig = (wal_st.st_mtime_ns, wal_st.st_size)
+        except OSError:
+            wal_sig = (0, 0)
+        return (db_st.st_mtime_ns, db_st.st_size, wal_sig[0], wal_sig[1])
+
+    def _invalidate_query_cache(self) -> None:
+        with self._lock:
+            self._query_cache_sig = None
+            self._query_cache.clear()
 
     def set_enabled(self, enabled: bool) -> None:
         """Ativa ou desativa o histórico opcional sem afetar pendências."""
@@ -31,7 +53,7 @@ class HistoryStore:
             self._ensure_schema()
 
     @contextmanager
-    def _connect(self, *, configure_wal: bool = False) -> Iterator[sqlite3.Connection]:
+    def _connect(self, *, configure_wal: bool = False, readonly: bool = False) -> Iterator[sqlite3.Connection]:
         if self.path.parent.is_symlink():
             raise PermissionError(f"Diretório de histórico não pode ser symlink: {self.path.parent}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +65,8 @@ class HistoryStore:
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA foreign_keys=ON;")
             yield conn
-            conn.commit()
+            if not readonly:
+                conn.commit()
         finally:
             conn.close()
 
@@ -154,6 +177,7 @@ class HistoryStore:
                     json.dumps(event.details, ensure_ascii=False),
                 ),
             )
+        self._invalidate_query_cache()
         return event
 
     def query(
@@ -165,9 +189,38 @@ class HistoryStore:
         until: str | None = None,
         limit: int = 200,
     ) -> list[EventRecord]:
-        """Consulta eventos com filtros por módulo, resultado e período."""
+        """Consulta eventos com filtros por módulo, resultado, período e cache leve por mtime."""
         if not self.path.exists():
             return []
+        safe_limit = max(1, min(int(limit), 5000))
+        cache_key = (module_id, confirmation_state, since, until, safe_limit)
+        sig = self._db_sig()
+        if sig is not None:
+            with self._lock:
+                if self._query_cache_sig == sig:
+                    cached = self._query_cache.get(cache_key)
+                    if cached is not None:
+                        return [
+                            EventRecord(
+                                event_id=ev.event_id,
+                                module_id=ev.module_id,
+                                action=ev.action,
+                                reason=ev.reason,
+                                timestamp=ev.timestamp,
+                                confirmation_state=ev.confirmation_state,
+                                actor=ev.actor,
+                                evidence=ev.evidence,
+                                app_name=ev.app_name,
+                                reversible=ev.reversible,
+                                revert_action=ev.revert_action,
+                                details=dict(ev.details),
+                            )
+                            for ev in cached
+                        ]
+                else:
+                    self._query_cache_sig = sig
+                    self._query_cache.clear()
+
         clauses: list[str] = []
         params: list[object] = []
         if module_id:
@@ -184,10 +237,10 @@ class HistoryStore:
             params.append(until)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT * FROM events {where_sql} ORDER BY timestamp DESC LIMIT ?"
-        params.append(max(1, min(int(limit), 5000)))
-        with self._connect() as conn:
+        params.append(safe_limit)
+        with self._connect(readonly=True) as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [
+        records = [
             EventRecord(
                 event_id=row["event_id"],
                 module_id=row["module_id"],
@@ -204,6 +257,29 @@ class HistoryStore:
             )
             for row in rows
         ]
+        if sig is not None:
+            with self._lock:
+                if len(self._query_cache) >= 32:
+                    self._query_cache.clear()
+                self._query_cache_sig = sig
+                self._query_cache[cache_key] = tuple(
+                    EventRecord(
+                        event_id=ev.event_id,
+                        module_id=ev.module_id,
+                        action=ev.action,
+                        reason=ev.reason,
+                        timestamp=ev.timestamp,
+                        confirmation_state=ev.confirmation_state,
+                        actor=ev.actor,
+                        evidence=ev.evidence,
+                        app_name=ev.app_name,
+                        reversible=ev.reversible,
+                        revert_action=ev.revert_action,
+                        details=dict(ev.details),
+                    )
+                    for ev in records
+                )
+        return records
 
     def query_grouped(
         self,

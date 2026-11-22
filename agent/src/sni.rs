@@ -68,15 +68,8 @@ impl StatusNotifierItem {
     }
 
     fn spawn_panel(&self) {
-        let has_pending = self
-            .state
-            .lock()
-            .map(|g| g.pending_count > 0)
-            .unwrap_or(false);
         let mut cmd = Command::new("mint-security-suite");
-        if has_pending {
-            cmd.args(["--page", "activity", "--tab", "pending"]);
-        }
+        cmd.args(["--page", "home"]);
         if let Ok(mut child) = cmd.spawn() {
             tokio::spawn(async move {
                 let _ = child.wait().await;

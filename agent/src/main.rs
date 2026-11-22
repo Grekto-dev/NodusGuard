@@ -85,7 +85,15 @@ impl SessionAgent {
     async fn open_panel(&self, page: &str) -> fdo::Result<bool> {
         if !matches!(
             page,
-            "" | "home" | "scans" | "protections" | "recovery" | "activity" | "settings"
+            ""
+                | "home"
+                | "scans"
+                | "quarantine"
+                | "protections"
+                | "recovery"
+                | "activity"
+                | "notifications"
+                | "settings"
         ) {
             return Err(fdo::Error::InvalidArgs(format!("Página inválida: {page}")));
         }

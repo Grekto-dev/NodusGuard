@@ -1,12 +1,91 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
+use serde_json::Value as JsonValue;
 use tokio::process::Command;
 use zbus::zvariant::Value;
 use zbus::Connection;
 
 use crate::state::PendingDecision;
+
+pub fn settings_config_path() -> PathBuf {
+    if let Ok(xdg_cfg) = std::env::var("XDG_CONFIG_HOME") {
+        let trimmed = xdg_cfg.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed)
+                .join("mint-security-suite")
+                .join("settings.json");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed)
+                .join(".config/mint-security-suite/settings.json");
+        }
+    }
+    PathBuf::from("/nonexistent-mintsec-settings.json")
+}
+
+pub fn is_popup_suppressed_from_path(settings_path: &Path, decision: &PendingDecision) -> bool {
+    if decision.kind == "paused_app" {
+        return false;
+    }
+    let meta = match fs::symlink_metadata(settings_path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > 262_144 {
+        return false;
+    }
+    let raw = match fs::read_to_string(settings_path) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let parsed: JsonValue = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let dnd = parsed
+        .get("do_not_disturb")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let game_mode = parsed
+        .get("game_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if dnd || game_mode {
+        return true;
+    }
+    let paused = parsed
+        .get("protection_paused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !paused {
+        return false;
+    }
+    let mode = parsed
+        .get("protection_pause_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+    if mode == "timed" {
+        if let Some(until_str) = parsed.get("protection_paused_until").and_then(|v| v.as_str()) {
+            if let Ok(until_dt) = DateTime::parse_from_rfc3339(until_str) {
+                return Utc::now() < until_dt.with_timezone(&Utc);
+            }
+        }
+        return false;
+    }
+    matches!(mode, "until_restart" | "indefinite")
+}
+
+pub fn is_popup_suppressed(decision: &PendingDecision) -> bool {
+    is_popup_suppressed_from_path(&settings_config_path(), decision)
+}
 
 #[derive(Debug, Default)]
 pub struct NotificationTracker {
@@ -51,6 +130,9 @@ pub async fn send_dbus_notification(
     tracker: &Arc<Mutex<NotificationTracker>>,
     decision: &PendingDecision,
 ) -> Option<u32> {
+    if is_popup_suppressed(decision) {
+        return None;
+    }
     let replaces_id = tracker
         .lock()
         .map(|t| t.existing_id(decision))
@@ -182,5 +264,50 @@ mod tests {
         tracker.record_sent(&d, 42);
         assert_eq!(tracker.existing_id(&d), 42);
         assert_eq!(tracker.pending_for_notif(42).as_deref(), Some("p-1"));
+    }
+
+    #[test]
+    fn suppresses_non_critical_popups_on_dnd_game_and_pause() {
+        let mut base = PendingDecision {
+            pending_id: "p-2".into(),
+            kind: "quarantine_detection".into(),
+            module_id: "antimalware".into(),
+            app_name: "eicar".into(),
+            title: "Detection".into(),
+            summary: "Summary".into(),
+            evidence: "EICAR".into(),
+            created_at: "2026-11-22T10:00:00-03:00".into(),
+            status: "open".into(),
+            fan_q_overflow: false,
+            affected_paths: vec![],
+            actions: vec![],
+            incident_id: None,
+            occurrences: 1,
+            metadata: HashMap::new(),
+        };
+
+        let tmp_path =
+            std::env::temp_dir().join(format!("nodusguard-notify-test-{}.json", uuid::Uuid::new_v4()));
+        fs::write(
+            &tmp_path,
+            r#"{"do_not_disturb": true, "game_mode": false, "protection_paused": false}"#,
+        )
+        .unwrap();
+        assert!(is_popup_suppressed_from_path(&tmp_path, &base));
+
+        // Critical paused_app alert bypasses suppression
+        base.kind = "paused_app".into();
+        assert!(!is_popup_suppressed_from_path(&tmp_path, &base));
+
+        // Protection paused until restart suppresses regular popups
+        base.kind = "quarantine_detection".into();
+        fs::write(
+            &tmp_path,
+            r#"{"do_not_disturb": false, "game_mode": false, "protection_paused": true, "protection_pause_mode": "until_restart"}"#,
+        )
+        .unwrap();
+        assert!(is_popup_suppressed_from_path(&tmp_path, &base));
+
+        let _ = fs::remove_file(&tmp_path);
     }
 }

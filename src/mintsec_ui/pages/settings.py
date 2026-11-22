@@ -63,6 +63,8 @@ class SettingsPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.app_window = app_window
         self._loading = False
+        self._about_lang: str | None = None
+        self._last_theme_sig: tuple[str, str] | None = None
 
         self.notebook = Gtk.Notebook()
         self.notebook.get_style_context().add_class("mintsec-tabs")
@@ -464,14 +466,25 @@ class SettingsPage(Gtk.Box):
                 pause_policy=cfg.pause_policy,
                 auto_scan_interval=cfg.auto_quick_scan_interval,
             )
-            self._populate_about()
+            self._last_theme_sig = (cfg.theme_mode, cfg.theme_preset)
+            self._about_lang = None
+            if self.get_mapped():
+                self._ensure_about_populated(cfg.language)
         finally:
             self._loading = False
+
+    def _ensure_about_populated(self, lang: str) -> None:
+        if self._about_lang == lang:
+            return
+        self._populate_about()
+        self._about_lang = lang
 
     def refresh(self, statuses: dict[str, Any] | None = None) -> None:
         self._loading = True
         try:
             cfg = self.app_window.controller.config_store.load()
+            self._ensure_about_populated(cfg.language)
+            self._last_theme_sig = (cfg.theme_mode, cfg.theme_preset)
             self.language_combo.set_active_id(cfg.language)
             self.theme_combo.set_active_id(cfg.theme_mode)
             self.preset_combo.set_active_id(cfg.theme_preset)
@@ -534,7 +547,12 @@ class SettingsPage(Gtk.Box):
             except Exception:  # noqa: BLE001
                 pass
 
-        self.app_window.apply_theme()
+        new_theme_mode = self.theme_combo.get_active_id() or "follow_system"
+        new_theme_preset = self.preset_combo.get_active_id() or "lavender"
+        theme_sig = (new_theme_mode, new_theme_preset)
+        if theme_sig != self._last_theme_sig:
+            self._last_theme_sig = theme_sig
+            self.app_window.apply_theme()
         if hasattr(self.app_window, "sync_tray"):
             self.app_window.sync_tray()
         if lang_changed:

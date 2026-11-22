@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -18,6 +19,7 @@ VALID_FIREWALL_OUTBOUND = {"monitor_only", "block_per_app"}
 VALID_LANGUAGES = {"en", "pt_BR"}
 VALID_PAUSE_MODES = {"none", "timed", "until_restart", "indefinite"}
 VALID_AUTO_SCAN_INTERVALS = {"6h", "12h", "daily", "weekly"}
+_REC_ID_RE = re.compile(r"^[a-z0-9_:-]{1,64}$")
 
 
 @dataclass
@@ -95,7 +97,36 @@ class SuiteConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SuiteConfig:
+        if not isinstance(data, dict):
+            data = {}
         raw_until = data.get("protection_paused_until")
+        clean_until: str | None = None
+        if isinstance(raw_until, str) and raw_until.strip():
+            try:
+                datetime.fromisoformat(raw_until.strip())
+                clean_until = raw_until.strip()
+            except ValueError:
+                clean_until = None
+
+        raw_modules = data.get("enabled_modules", {})
+        clean_modules = (
+            {str(k): bool(v) for k, v in raw_modules.items()}
+            if isinstance(raw_modules, dict)
+            else {}
+        )
+
+        raw_ignored = data.get("ignored_recommendations", [])
+        clean_ignored: list[str] = []
+        seen_ignored: set[str] = set()
+        if isinstance(raw_ignored, list):
+            for entry in raw_ignored:
+                s = str(entry).strip()
+                if _REC_ID_RE.fullmatch(s) and s not in seen_ignored:
+                    seen_ignored.add(s)
+                    clean_ignored.append(s)
+                    if len(clean_ignored) >= 32:
+                        break
+
         cfg = cls(
             theme_mode=str(data.get("theme_mode", "follow_system")),
             theme_preset=str(data.get("theme_preset", "lavender")),
@@ -107,7 +138,7 @@ class SuiteConfig:
             history_enabled=bool(data.get("history_enabled", True)),
             notifications_grouped=bool(data.get("notifications_grouped", True)),
             removable_media_prompt=bool(data.get("removable_media_prompt", True)),
-            enabled_modules=dict(data.get("enabled_modules", {})),
+            enabled_modules=clean_modules,
             autostart_enabled=bool(data.get("autostart_enabled", True)),
             auto_quick_scan_enabled=bool(data.get("auto_quick_scan_enabled", True)),
             auto_quick_scan_interval=str(data.get("auto_quick_scan_interval", "daily")),
@@ -116,8 +147,8 @@ class SuiteConfig:
             game_mode=bool(data.get("game_mode", False)),
             protection_paused=bool(data.get("protection_paused", False)),
             protection_pause_mode=str(data.get("protection_pause_mode", "none")),
-            protection_paused_until=str(raw_until) if raw_until else None,
-            ignored_recommendations=[str(x) for x in data.get("ignored_recommendations", [])],
+            protection_paused_until=clean_until,
+            ignored_recommendations=clean_ignored,
         )
         cfg.validate()
         return cfg
@@ -128,7 +159,7 @@ class ConfigStore:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (xdg_dir("XDG_CONFIG_HOME", ".config") / "settings.json")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._cached_sig: tuple[int, int] | None = None
         self._cached_raw: dict[str, Any] | None = None
 
@@ -164,10 +195,11 @@ class ConfigStore:
             self._cached_raw = payload if self._cached_sig is not None else None
 
     def update(self, **changes: Any) -> SuiteConfig:
-        cfg = self.load()
-        for key, value in changes.items():
-            if not hasattr(cfg, key):
-                raise KeyError(f"Campo de configuração desconhecido: {key}")
-            setattr(cfg, key, value)
-        self.save(cfg)
-        return cfg
+        with self._lock:
+            cfg = self.load()
+            for key, value in changes.items():
+                if not hasattr(cfg, key):
+                    raise KeyError(f"Campo de configuração desconhecido: {key}")
+                setattr(cfg, key, value)
+            self.save(cfg)
+            return cfg

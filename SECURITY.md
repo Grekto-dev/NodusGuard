@@ -25,4 +25,5 @@ NodusGuard enforces several structural safeguards:
 
 | Version | Supported |
 |---|---|
-| `0.1.0` | Yes |
+| `0.2.0` | Yes |
+| `0.1.0` | End-of-life (upgrade to `0.2.0`) |

@@ -85,7 +85,8 @@ class NotificationsPage(Gtk.Box):
         set_accessible(self.refresh_btn, tr("notif_page.btn_refresh"))
         self.history_heading.set_text(tr("notif_page.history_title"))
         self._last_sig = None
-        self.refresh()
+        if self.get_mapped():
+            self.refresh()
 
     def _add_mode_banner(
         self,

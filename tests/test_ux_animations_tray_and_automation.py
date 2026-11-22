@@ -10,15 +10,17 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 from mintsec.auth import CallerAuthorizer
 from mintsec.autostart import get_autostart_file, sync_autostart
 from mintsec.config import ConfigStore, SuiteConfig
-from mintsec.contracts import ModuleState
+from mintsec.contracts import ModuleState, read_json_safe
 from mintsec.history import HistoryStore
 from mintsec.incident import IncidentManager
 from mintsec.pending import PendingStore
 from mintsec.runner import CommandResult
+from mintsec.services import daemon
 from mintsec.services.catalog import SuiteController
 
 
@@ -233,12 +235,144 @@ class UxAutomationBackendTests(unittest.TestCase):
             recs_restored = ctrl.get_protection_recommendations()
             self.assertTrue(any(r["rec_id"] == "db_outdated" for r in recs_restored))
 
+    def test_security_hardening_symlinks_corrupt_json_and_config_sanitization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real_target = base / "real.json"
+            real_target.write_text('{"ok": true}', encoding="utf-8")
+            sym = base / "sym.json"
+            sym.symlink_to(real_target)
+            with self.assertRaises(PermissionError):
+                read_json_safe(sym, default={})
+
+            broken = base / "broken.json"
+            broken.symlink_to(base / "does-not-exist.json")
+            with self.assertRaises(PermissionError):
+                read_json_safe(broken, default={})
+
+            corrupt = base / "corrupt.json"
+            corrupt.write_text("{not-valid-json", encoding="utf-8")
+            self.assertEqual(read_json_safe(corrupt, default={"fallback": 1}), {"fallback": 1})
+
+            huge = base / "huge.json"
+            with huge.open("wb") as handle:
+                handle.truncate(17 * 1024 * 1024)
+            with self.assertRaises(ValueError):
+                read_json_safe(huge, default={})
+
+            # ConfigStore sanitiza recomendações malformadas e datas inválidas
+            cfg_file = base / "settings.json"
+            many_recs = [f"rec_{i}" for i in range(40)]
+            cfg_file.write_text(
+                '{"ignored_recommendations": ["db_outdated", "../bad", "db_outdated", '
+                + ", ".join(f'"{r}"' for r in many_recs)
+                + '], "protection_paused_until": "not-an-iso-date"}',
+                encoding="utf-8",
+            )
+            cfg = ConfigStore(cfg_file).load()
+            self.assertEqual(len(cfg.ignored_recommendations), 32)
+            self.assertNotIn("../bad", cfg.ignored_recommendations)
+            self.assertIsNone(cfg.protection_paused_until)
+
+            # Autostart recusa symlinks no diretório e no arquivo .desktop
+            cfg_home = base / "cfg_home"
+            cfg_home.mkdir()
+            autostart_dir = cfg_home / "autostart"
+            real_auto = base / "real_autostart"
+            real_auto.mkdir()
+            autostart_dir.symlink_to(real_auto)
+            with self.assertRaises(PermissionError):
+                sync_autostart(True, config_home=cfg_home)
+
+    def test_antimalware_capping_service_unit_and_daemon_run_schedule(self) -> None:
+        class _ManyErrorsRunner(_FakeUxRunner):
+            def run(self, argv, *, timeout=None, env=None, on_line=None, cancel_event=None) -> CommandResult:
+                cmd = [str(a) for a in argv]
+                self.calls.append(cmd)
+                if Path(cmd[0]).name == "clamscan":
+                    lines = [f"/restricted/f_{i}: Permission denied" for i in range(250)]
+                    if on_line:
+                        for ln in lines:
+                            on_line(ln)
+                    return CommandResult(tuple(cmd), 0, "\n".join(lines) + "\n", "")
+                return super().run(argv, timeout=timeout, env=env, on_line=on_line, cancel_event=cancel_event)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctrl, _runner, _target, _db_dir = _make_controller(Path(tmp))
+            ctrl.antimalware.runner = _ManyErrorsRunner(Path(tmp))
+            ctrl.antimalware.estimate_scan_total = lambda *_a, **_kw: (1, True)  # type: ignore[method-assign]
+            res = ctrl.antimalware.run_scan(scope="quick")
+            self.assertEqual(len(res.inaccessible_items), 201)
+            self.assertIn("+50", res.inaccessible_items[-1]["reason"])
+
+            # .service + .timer criados e removidos em conjunto
+            ctrl.antimalware.save_schedule(schedule_id="nightly", scope="system", frequency="daily")
+            timer_p = ctrl.antimalware.systemd_user_dir / "mintsec-clamscan-nightly.timer"
+            srv_p = ctrl.antimalware.systemd_user_dir / "mintsec-clamscan-nightly.service"
+            self.assertTrue(timer_p.is_file())
+            self.assertTrue(srv_p.is_file())
+            srv_txt = srv_p.read_text(encoding="utf-8")
+            self.assertIn("ExecStart=/usr/bin/mint-security-daemon --run-schedule nightly", srv_txt)
+            self.assertIn("NoNewPrivileges=yes", srv_txt)
+
+            # Daemon respeita o escopo do agendamento salvo e pausa/game_mode
+            with mock.patch.object(daemon, "SuiteController", return_value=ctrl):
+                ctrl.config_store.update(game_mode=True)
+                self.assertEqual(daemon.main(["--run-schedule", "nightly"]), 0)
+                clam_before = [c for c in ctrl.antimalware.runner.calls if Path(c[0]).name == "clamscan"]
+                ctrl.config_store.update(game_mode=False)
+                self.assertEqual(daemon.main(["--run-schedule", "nightly"]), 0)
+                clam_after = [c for c in ctrl.antimalware.runner.calls if Path(c[0]).name == "clamscan"]
+                self.assertEqual(len(clam_after), len(clam_before) + 1)
+                self.assertIn("/", clam_after[-1])
+
+            ctrl.antimalware.remove_schedule("nightly")
+            self.assertFalse(timer_p.exists())
+            self.assertFalse(srv_p.exists())
+
+    def test_pending_and_history_caches_and_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctrl, _runner, _target, _db_dir = _make_controller(Path(tmp))
+            self.assertEqual(ctrl.pending_store.count_open(), 0)
+            dec = ctrl.pending_store.create(
+                kind="quarantine_detection",
+                module_id="antimalware",
+                title="Det",
+                summary="Sum",
+                evidence="Ev",
+            )
+            self.assertEqual(ctrl.pending_store.count_open(), 1)
+            self.assertEqual(ctrl.pending_store.count_open(), 1)  # hit de cache sem alocar objetos
+            ctrl.pending_store.resolve(dec.pending_id)
+            self.assertEqual(ctrl.pending_store.count_open(), 0)
+
+            ctrl.history_store.record(
+                module_id="antimalware",
+                action="Scan 1",
+                reason="OK",
+                confirmation_state="confirmed",
+                details={"nested": 1},
+            )
+            q1 = ctrl.history_store.query(limit=5)
+            q1[0].details["mutated"] = True
+            q2 = ctrl.history_store.query(limit=5)
+            self.assertEqual(len(q2), 1)
+            self.assertNotIn("mutated", q2[0].details)
+            ctrl.history_store.record(
+                module_id="antimalware",
+                action="Scan 2",
+                reason="OK",
+                confirmation_state="confirmed",
+            )
+            q3 = ctrl.history_store.query(limit=5)
+            self.assertEqual(len(q3), 2)
+
 
 class UxGtkXephyrTests(unittest.TestCase):
     def test_ui_animations_tray_pause_quarantine_notifications_and_screenshots(self) -> None:
-        shot_dir = Path(
-            "/home/pedro/.gemini/antigravity/brain/10e9e2c8-788a-420b-8635-b87c7f567263/scratch"
-        )
+        env_shot = os.environ.get("MINTSEC_SHOT_DIR", "").strip()
+        tmp_shot_ctx = None if env_shot else tempfile.TemporaryDirectory(prefix="mintsec-shots-")
+        shot_dir = Path(env_shot) if env_shot else Path(tmp_shot_ctx.name)
         shot_dir.mkdir(parents=True, exist_ok=True)
         root_dir = Path(__file__).resolve().parents[1]
 
@@ -508,6 +642,41 @@ try:
         assert tray.item_about.get_label() == "Sobre"
         assert tray.item_quit.get_label() == "Sair"
 
+        # Animação ativa na Home + glow surface cacheado + sub-assinaturas preservam widgets
+        win.navigate_to("home")
+        win.home_page.refresh(statuses=healthy_statuses)
+        flush(60)
+        assert win.home_page.status_canvas._glow_cache_surface is not None
+        cov_children_before = list(win.home_page.coverage_flow.get_children())
+        ctrl.history_store.record(
+            module_id="antimalware",
+            action="Evento recente",
+            reason="Teste sub-assinatura",
+            confirmation_state="confirmed",
+        )
+        win.home_page.refresh(statuses=healthy_statuses)
+        cov_children_after = list(win.home_page.coverage_flow.get_children())
+        assert len(cov_children_before) == len(cov_children_after)
+        if cov_children_before:
+            assert cov_children_before[0] is cov_children_after[0]
+
+        # Clique esquerdo na bandeja abre SEMPRE a página inicial ("home")
+        win.navigate_to("settings")
+        flush(40)
+        assert win.current_page == "settings"
+        win.tray._on_xapp_activate(None, 3, 0)  # clique direito não abre Home
+        flush(20)
+        assert win.current_page == "settings"
+        win.tray._on_xapp_activate(None, 1, 0)  # clique esquerdo abre Home
+        flush(60)
+        assert win.current_page == "home"
+
+        win.navigate_to("scans")
+        flush(40)
+        win.tray._on_xapp_activate(None, 1, 0)
+        flush(60)
+        assert win.current_page == "home"
+
         win.destroy()
         flush(40)
 finally:
@@ -520,14 +689,27 @@ finally:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(root_dir / "src")
         env["SHOT_DIR"] = str(shot_dir)
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        self.assertEqual(proc.returncode, 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+            for shot_name in (
+                "home_green.png",
+                "home_red_recs.png",
+                "scans_eta.png",
+                "quarantine.png",
+                "notifications.png",
+                "pause_dialog.png",
+            ):
+                self.assertTrue((shot_dir / shot_name).is_file(), f"Screenshot missing: {shot_name}")
+        finally:
+            if tmp_shot_ctx is not None:
+                tmp_shot_ctx.cleanup()
 
 
 if __name__ == "__main__":

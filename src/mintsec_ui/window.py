@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 from typing import Any
 
@@ -35,6 +36,7 @@ from mintsec_ui.widgets import (  # noqa: E402
     friendly_module_name,
     install_app_icon,
     make_illustration,
+    trim_pixbuf_cache,
 )
 
 NAV_ITEMS = (
@@ -77,6 +79,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self._quitting = False
         self._high_contrast = False
         self._auto_scanning = False
+        self._updating_db = False
         self._anim_sig: int | None = None
         self._bg_timer_id: int | None = None
         self._cached_statuses: dict[str, Any] | None = None
@@ -256,7 +259,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self.stack.add_named(widget, page_id)
 
         self.tray = NodusGuardTray(
-            on_open=self.present_from_tray,
+            on_open=self.open_home_from_tray,
             on_pause=self.open_pause_dialog,
             on_resume=self.resume_protection,
             on_settings=lambda: (self.present_from_tray(), self.navigate_to("settings", tab="general")),
@@ -305,6 +308,8 @@ class SuiteWindow(Gtk.ApplicationWindow):
         if getattr(self, "tray", None) is not None and self.tray.has_active_backend and not self._quitting:
             self.hide()
             self.home_page.set_animations_active(False)
+            trim_pixbuf_cache()
+            gc.collect()
             return True
         return False
 
@@ -631,8 +636,14 @@ class SuiteWindow(Gtk.ApplicationWindow):
 
     def present_from_tray(self) -> None:
         self.show()
-        self.present()
+        self.deiconify()
+        self.present_with_time(Gdk.CURRENT_TIME)
         self._sync_animations_pref()
+
+    def open_home_from_tray(self) -> None:
+        """Ao clicar com o botão esquerdo na bandeja, abre sempre a página inicial."""
+        self.present_from_tray()
+        self.navigate_to("home")
 
     def open_pause_dialog(self) -> None:
         self.present_from_tray()
@@ -661,6 +672,9 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.refresh_all(force=False)
 
     def trigger_db_update(self) -> None:
+        if self._updating_db:
+            return
+        self._updating_db = True
         btn = getattr(self.home_page, "update_db_btn", None)
         if btn is not None:
             btn.set_sensitive(False)
@@ -677,6 +691,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
                 err_msg = str(exc)
 
             def _done() -> bool:
+                self._updating_db = False
                 if self._destroyed:
                     return False
                 if btn is not None:

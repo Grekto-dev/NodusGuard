@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name to release (for example: v0.1.0)"
+        description: "Tag name to release (for example: v0.2.0)"
         required: false
         type: string
 
@@ -106,11 +106,12 @@ jobs:
             Clear, transparent, modular security suite for Linux Mint 22.x and Ubuntu 24.04 (`amd64`).
 
             ### Highlights in ${{ env.RELEASE_TAG }}
-            - Unified GTK 3 control panel with native server-side decorations, adaptive light/dark/high-contrast themes, and zero idle repaints
-            - Built-in live language switcher (**English** default + **Brazilian Portuguese**)
-            - Settings **About** tab (`v${{ env.RELEASE_VERSION }}`) with full open-source credits
-            - Multi-size RGBA application icon (`48×48`, `64×64`, `128×128`, `256×256`) and custom flat illustrations
-            - Modular packages for **Antivirus** (ClamAV), **Network Shield** (UFW + OpenSnitch), **File Backups** (restic + Timeshift), **Wi-Fi Network**, **Safe Browsing** (`dnsmasq`), **Protected Browser** (`bubblewrap` + AppArmor), **Emergency USB** (`UDisks2` + `gpgv`), plus **Nemo / Caja / Thunar** context-menu integrations
+            - Ultra-light vector Cairo Home hero animation (emerald green vs. alert red) with actionable recommendations, **Ignore**/**Restore** controls, and **Last Scan / Virus DB** indicators
+            - Dedicated **Quarantine** and **Notifications** views (with notification bell in the sidebar footer beside **Settings**)
+            - Status-reactive system tray icon (`XApp.StatusIcon` / `AyatanaAppIndicator3`): left-click opens **Home**, right-click opens `NodusGuard`, `Pause Protection…` (`1 min`–`5 hours`, until restart, or manual), `Settings`, `Do Not Disturb`, `Game Mode`, `About`, `Quit`
+            - **Full System Scan**, live `%` progress bar & ETA across all scans, XDG autostart (`--minimized`), and daily periodic quick scan defaults
+            - Security hardening against symlink attacks, strict config sanitization, companion systemd user timers, and lower RAM/CPU usage across GTK & SQLite caches
+            - Modular packages for **Antivirus**, **Network Shield**, **File Backups**, **Wi-Fi Network**, **Safe Browsing**, **Protected Browser**, **Emergency USB**, plus **Nemo / Caja / Thunar** integrations
 
             ### Installation
             ```bash
