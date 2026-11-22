@@ -104,6 +104,20 @@ class SettingsPage(Gtk.Box):
         app_card.pack_start(preset_row, False, False, 0)
         app_wrap.pack_start(app_card, False, False, 0)
 
+        startup_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        startup_card.get_style_context().add_class("mintsec-list-card")
+        self._startup_title_lbl = Gtk.Label(label="", xalign=0.0)
+        self._startup_title_lbl.get_style_context().add_class("mintsec-section-title")
+        startup_card.pack_start(self._startup_title_lbl, False, False, 0)
+
+        self.autostart_switch = Gtk.Switch()
+        self.autostart_switch.connect("notify::active", self._on_changed)
+        autostart_row, self._autostart_title_lbl, self._autostart_sub_lbl = _make_pref_row(
+            "", "", self.autostart_switch
+        )
+        startup_card.pack_start(autostart_row, False, False, 0)
+        app_wrap.pack_start(startup_card, False, False, 0)
+
         disp_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         disp_card.get_style_context().add_class("mintsec-card")
         self._disp_exp = Gtk.Expander(label="")
@@ -122,6 +136,63 @@ class SettingsPage(Gtk.Box):
         pref_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         pref_wrap.set_margin_top(6)
         pref_wrap.set_margin_bottom(12)
+
+        auto_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        auto_card.get_style_context().add_class("mintsec-list-card")
+        self._automation_title_lbl = Gtk.Label(label="", xalign=0.0)
+        self._automation_title_lbl.get_style_context().add_class("mintsec-section-title")
+        auto_card.pack_start(self._automation_title_lbl, False, False, 0)
+
+        self.auto_scan_switch = Gtk.Switch()
+        self.auto_scan_switch.connect("notify::active", self._on_changed)
+        as_row, self._auto_scan_title_lbl, self._auto_scan_sub_lbl = _make_pref_row(
+            "", "", self.auto_scan_switch
+        )
+        auto_card.pack_start(as_row, False, False, 0)
+        _add_divider(auto_card)
+
+        self.auto_scan_interval_combo = Gtk.ComboBoxText()
+        self.auto_scan_interval_combo.set_size_request(220, -1)
+        self.auto_scan_interval_combo.connect("changed", self._on_changed)
+        asi_row, self._auto_scan_int_title_lbl, _ = _make_pref_row(
+            "", "", self.auto_scan_interval_combo
+        )
+        auto_card.pack_start(asi_row, False, False, 0)
+        _add_divider(auto_card)
+
+        self.auto_db_switch = Gtk.Switch()
+        self.auto_db_switch.connect("notify::active", self._on_changed)
+        adb_row, self._auto_db_title_lbl, self._auto_db_sub_lbl = _make_pref_row(
+            "", "", self.auto_db_switch
+        )
+        auto_card.pack_start(adb_row, False, False, 0)
+        _add_divider(auto_card)
+
+        self.dnd_switch = Gtk.Switch()
+        self.dnd_switch.connect("notify::active", self._on_changed)
+        dnd_row, self._dnd_title_lbl, self._dnd_sub_lbl = _make_pref_row(
+            "", "", self.dnd_switch
+        )
+        auto_card.pack_start(dnd_row, False, False, 0)
+        _add_divider(auto_card)
+
+        self.game_mode_switch = Gtk.Switch()
+        self.game_mode_switch.connect("notify::active", self._on_changed)
+        gm_row, self._game_mode_title_lbl, self._game_mode_sub_lbl = _make_pref_row(
+            "", "", self.game_mode_switch
+        )
+        auto_card.pack_start(gm_row, False, False, 0)
+        _add_divider(auto_card)
+
+        self.restore_recs_btn = Gtk.Button(label="")
+        self.restore_recs_btn.connect("clicked", self._on_restore_ignored_recs)
+        rec_row, self._restore_recs_title_lbl, _ = _make_pref_row(
+            "", "", self.restore_recs_btn
+        )
+        auto_card.pack_start(rec_row, False, False, 0)
+
+        pref_wrap.pack_start(auto_card, False, False, 0)
+
         notif_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         notif_card.get_style_context().add_class("mintsec-list-card")
 
@@ -176,6 +247,11 @@ class SettingsPage(Gtk.Box):
 
         self.apply_language()
 
+    def select_tab(self, tab_name: str) -> None:
+        mapping = {"general": 0, "alerts": 1, "about": 2}
+        if tab_name in mapping:
+            self.notebook.set_current_page(mapping[tab_name])
+
     def _populate_combos(
         self,
         *,
@@ -183,6 +259,7 @@ class SettingsPage(Gtk.Box):
         theme_preset: str | None = None,
         density: str | None = None,
         pause_policy: str | None = None,
+        auto_scan_interval: str | None = None,
     ) -> None:
         _repopulate_combo(
             self.theme_combo,
@@ -219,6 +296,16 @@ class SettingsPage(Gtk.Box):
                 ("auto_pause", tr("settings.policy_pause")),
             ),
             pause_policy,
+        )
+        _repopulate_combo(
+            self.auto_scan_interval_combo,
+            (
+                ("6h", tr("settings.interval_6h")),
+                ("12h", tr("settings.interval_12h")),
+                ("daily", tr("settings.interval_daily")),
+                ("weekly", tr("settings.interval_weekly")),
+            ),
+            auto_scan_interval,
         )
 
     def _populate_about(self) -> None:
@@ -319,6 +406,42 @@ class SettingsPage(Gtk.Box):
             self._dens_sub_lbl.set_text(tr("settings.density_sub"))
             set_accessible(self.density_combo, tr("settings.density_a11y"), tr("settings.density_desc"))
 
+            self._startup_title_lbl.set_text(tr("settings.startup_title"))
+            self._autostart_title_lbl.set_text(tr("settings.autostart_row"))
+            self._autostart_sub_lbl.set_text(tr("settings.autostart_desc"))
+            self.autostart_switch.set_active(cfg.autostart_enabled)
+            set_accessible(self.autostart_switch, tr("settings.autostart_row"), tr("settings.autostart_desc"))
+
+            self._automation_title_lbl.set_text(tr("settings.automation_title"))
+            self._auto_scan_title_lbl.set_text(tr("settings.auto_scan_row"))
+            self._auto_scan_sub_lbl.set_text(tr("settings.auto_scan_desc"))
+            self.auto_scan_switch.set_active(cfg.auto_quick_scan_enabled)
+            set_accessible(self.auto_scan_switch, tr("settings.auto_scan_row"), tr("settings.auto_scan_desc"))
+
+            self._auto_scan_int_title_lbl.set_text(tr("settings.auto_scan_interval_row"))
+            set_accessible(self.auto_scan_interval_combo, tr("settings.auto_scan_interval_row"))
+            self.auto_scan_interval_combo.set_sensitive(cfg.auto_quick_scan_enabled)
+
+            self._auto_db_title_lbl.set_text(tr("settings.auto_db_row"))
+            self._auto_db_sub_lbl.set_text(tr("settings.auto_db_desc"))
+            self.auto_db_switch.set_active(cfg.auto_db_update_enabled)
+            set_accessible(self.auto_db_switch, tr("settings.auto_db_row"), tr("settings.auto_db_desc"))
+
+            self._dnd_title_lbl.set_text(tr("settings.dnd_row"))
+            self._dnd_sub_lbl.set_text(tr("settings.dnd_desc"))
+            self.dnd_switch.set_active(cfg.do_not_disturb)
+            set_accessible(self.dnd_switch, tr("settings.dnd_row"), tr("settings.dnd_desc"))
+
+            self._game_mode_title_lbl.set_text(tr("settings.game_mode_row"))
+            self._game_mode_sub_lbl.set_text(tr("settings.game_mode_desc"))
+            self.game_mode_switch.set_active(cfg.game_mode)
+            set_accessible(self.game_mode_switch, tr("settings.game_mode_row"), tr("settings.game_mode_desc"))
+
+            self._restore_recs_title_lbl.set_text(tr("settings.recs_restore_row"))
+            self.restore_recs_btn.set_label(tr("settings.recs_restore_btn"))
+            set_accessible(self.restore_recs_btn, tr("settings.recs_restore_btn"))
+            self.restore_recs_btn.set_sensitive(bool(cfg.ignored_recommendations))
+
             self.chk_grouped.set_label(tr("settings.chk_grouped"))
             set_accessible(self.chk_grouped, tr("settings.chk_grouped_a11y"), tr("settings.chk_grouped_desc"))
             self.chk_media.set_label(tr("settings.chk_media"))
@@ -339,6 +462,7 @@ class SettingsPage(Gtk.Box):
                 theme_preset=cfg.theme_preset,
                 density=cfg.density,
                 pause_policy=cfg.pause_policy,
+                auto_scan_interval=cfg.auto_quick_scan_interval,
             )
             self._populate_about()
         finally:
@@ -353,35 +477,80 @@ class SettingsPage(Gtk.Box):
             self.preset_combo.set_active_id(cfg.theme_preset)
             self.density_combo.set_active_id(cfg.density)
             self.policy_combo.set_active_id(cfg.pause_policy)
+            self.autostart_switch.set_active(cfg.autostart_enabled)
+            self.auto_scan_switch.set_active(cfg.auto_quick_scan_enabled)
+            self.auto_scan_interval_combo.set_active_id(cfg.auto_quick_scan_interval)
+            self.auto_scan_interval_combo.set_sensitive(cfg.auto_quick_scan_enabled)
+            self.auto_db_switch.set_active(cfg.auto_db_update_enabled)
+            self.dnd_switch.set_active(cfg.do_not_disturb)
+            self.game_mode_switch.set_active(cfg.game_mode)
+            self.restore_recs_btn.set_sensitive(bool(cfg.ignored_recommendations))
             self.chk_grouped.set_active(cfg.notifications_grouped)
             self.chk_media.set_active(cfg.removable_media_prompt)
             self.chk_history.set_active(cfg.history_enabled)
         finally:
             self._loading = False
 
+    def _on_restore_ignored_recs(self, *_args: object) -> None:
+        self.app_window.controller.restore_ignored_recommendations()
+        self.restore_recs_btn.set_sensitive(False)
+        for page_name in ("home_page",):
+            page = getattr(self.app_window, page_name, None)
+            if page is not None and hasattr(page, "_last_render_sig"):
+                page._last_render_sig = None
+        self.app_window.refresh_all(force=False)
+
     def _on_changed(self, *_args: object) -> None:
         if self._loading:
             return
         new_lang = self.language_combo.get_active_id() or "en"
         lang_changed = new_lang != get_language()
+        auto_scan_on = self.auto_scan_switch.get_active()
+        self.auto_scan_interval_combo.set_sensitive(auto_scan_on)
+
         self.app_window.controller.config_store.update(
             language=new_lang,
             theme_mode=self.theme_combo.get_active_id() or "follow_system",
             theme_preset=self.preset_combo.get_active_id() or "lavender",
             density=self.density_combo.get_active_id() or "essential",
             pause_policy=self.policy_combo.get_active_id() or "unset",
+            autostart_enabled=self.autostart_switch.get_active(),
+            auto_quick_scan_enabled=auto_scan_on,
+            auto_quick_scan_interval=self.auto_scan_interval_combo.get_active_id() or "daily",
+            auto_db_update_enabled=self.auto_db_switch.get_active(),
+            do_not_disturb=self.dnd_switch.get_active(),
+            game_mode=self.game_mode_switch.get_active(),
             notifications_grouped=self.chk_grouped.get_active(),
             removable_media_prompt=self.chk_media.get_active(),
             history_enabled=self.chk_history.get_active(),
         )
+        try:
+            self.app_window.controller.ensure_default_automation()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.app_window.controller.is_live_host_runner:
+            try:
+                self.app_window.controller.sync_autostart()
+            except Exception:  # noqa: BLE001
+                pass
+
         self.app_window.apply_theme()
+        if hasattr(self.app_window, "sync_tray"):
+            self.app_window.sync_tray()
         if lang_changed:
             self.app_window.apply_language()
             return
         # Invalida somente o render visual sem redisparar subprocessos no host
-        for page in (self.app_window.home_page, self.app_window.protections_page, self.app_window.activity_page):
-            if hasattr(page, "_last_render_sig"):
+        for page in (
+            self.app_window.home_page,
+            self.app_window.protections_page,
+            self.app_window.activity_page,
+            getattr(self.app_window, "notifications_page", None),
+        ):
+            if page is not None and hasattr(page, "_last_render_sig"):
                 page._last_render_sig = None
-            if hasattr(page, "_last_hist_sig"):
+            if page is not None and hasattr(page, "_last_hist_sig"):
                 page._last_hist_sig = None
+            if page is not None and hasattr(page, "_last_sig"):
+                page._last_sig = None
         self.app_window.refresh_all(force=False)

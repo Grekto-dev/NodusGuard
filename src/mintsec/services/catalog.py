@@ -6,11 +6,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from mintsec.auth import CallerAuthorizer
-from mintsec.config import ConfigStore, SuiteConfig
+from mintsec.autostart import sync_autostart as sync_autostart_file
+from mintsec.config import VALID_PAUSE_MODES, ConfigStore, SuiteConfig
 from mintsec.contracts import (
     ModuleManifest,
     ModuleState,
@@ -552,3 +554,276 @@ class SuiteController:
             )
             return resolved
         raise ValueError(f"Ação desconhecida para aplicativo pausado: {action}")
+
+    # --- Pausa de proteção, autostart, recomendações e saúde global ---
+
+    def pause_protection(self, *, mode: str, minutes: int | None = None) -> SuiteConfig:
+        """Pausa a proteção por duração definida, até reiniciar ou indefinidamente."""
+        if mode not in VALID_PAUSE_MODES or mode == "none":
+            raise ValueError(f"Modo de pausa inválido: {mode}")
+        until_iso: str | None = None
+        if mode == "timed":
+            mins = int(minutes or 15)
+            if mins <= 0:
+                raise ValueError("Duração da pausa deve ser positiva.")
+            until_iso = (datetime.now().astimezone() + timedelta(minutes=mins)).isoformat(timespec="seconds")
+        cfg = self.config_store.update(
+            protection_paused=True,
+            protection_pause_mode=mode,
+            protection_paused_until=until_iso,
+        )
+        self.history_store.record(
+            module_id="suite",
+            action="Proteção pausada",
+            reason=f"Modo: {mode}" + (f" ({minutes} min)" if mode == "timed" else ""),
+            confirmation_state="confirmed",
+            actor="user",
+            reversible=True,
+            revert_action="resume_protection",
+        )
+        return cfg
+
+    def resume_protection(self) -> SuiteConfig:
+        """Retoma a proteção após pausa temporária ou manual."""
+        cfg = self.config_store.update(
+            protection_paused=False,
+            protection_pause_mode="none",
+            protection_paused_until=None,
+        )
+        self.history_store.record(
+            module_id="suite",
+            action="Proteção retomada",
+            reason="Monitoramento e varreduras periódicas reativados.",
+            confirmation_state="confirmed",
+            actor="suite",
+        )
+        return cfg
+
+    def check_pause_expiry(self) -> bool:
+        """Retoma automaticamente caso a pausa temporizada tenha expirado."""
+        cfg = self.config_store.load()
+        if cfg.protection_paused and not cfg.is_protection_paused_now():
+            self.resume_protection()
+            return True
+        return False
+
+    def clear_until_restart_pause_on_startup(self) -> None:
+        """Limpa pausa configurada até a reinicialização do aplicativo ao abrir."""
+        cfg = self.config_store.load()
+        if cfg.protection_paused and cfg.protection_pause_mode == "until_restart":
+            self.resume_protection()
+
+    def sync_autostart(self, *, config_home: Path | None = None) -> Path:
+        """Sincroniza arquivo .desktop de autostart com SuiteConfig.autostart_enabled."""
+        cfg = self.config_store.load()
+        return sync_autostart_file(cfg.autostart_enabled, config_home=config_home)
+
+    def ensure_default_automation(self) -> None:
+        """Mantém o agendamento periódico rápido alinhado às configurações."""
+        cfg = self.config_store.load()
+        schedules = self.antimalware.list_schedules()
+        existing = next((s for s in schedules if s.get("schedule_id") == "auto_quick"), None)
+        if cfg.auto_quick_scan_enabled:
+            if (
+                existing is None
+                or existing.get("scope") != "quick"
+                or existing.get("frequency") != cfg.auto_quick_scan_interval
+                or not existing.get("active", True)
+            ):
+                self.antimalware.save_schedule(
+                    schedule_id="auto_quick",
+                    scope="quick",
+                    frequency=cfg.auto_quick_scan_interval,
+                    active=True,
+                )
+        elif existing is not None:
+            self.antimalware.remove_schedule("auto_quick")
+
+    def is_auto_scan_due(self, *, now: datetime | None = None) -> bool:
+        """Verifica se uma varredura rápida automática periódica já venceu o intervalo."""
+        cfg = self.config_store.load()
+        if not cfg.auto_quick_scan_enabled or cfg.is_protection_paused_now() or cfg.game_mode:
+            return False
+        if self.antimalware.runner.which("clamscan") is None:
+            return False
+        state_data = self.antimalware._load_state()
+        last_scan = state_data.get("last_scan") or {}
+        finished_raw = last_scan.get("finished_at")
+        if not finished_raw:
+            return True
+        try:
+            finished_dt = datetime.fromisoformat(str(finished_raw))
+        except ValueError:
+            return True
+        ref = now or datetime.now(tz=finished_dt.tzinfo)
+        if ref.tzinfo is None and finished_dt.tzinfo is not None:
+            ref = ref.replace(tzinfo=finished_dt.tzinfo)
+        interval_hours = {"6h": 6.0, "12h": 12.0, "daily": 24.0, "weekly": 168.0}[
+            cfg.auto_quick_scan_interval
+        ]
+        return (ref - finished_dt).total_seconds() >= interval_hours * 3600.0
+
+    def ignore_recommendation(self, rec_id: str) -> SuiteConfig:
+        """Oculta recomendação ignorável específica na página inicial."""
+        cfg = self.config_store.load()
+        cur = list(cfg.ignored_recommendations)
+        if rec_id not in cur:
+            cur.append(rec_id)
+            return self.config_store.update(ignored_recommendations=cur)
+        return cfg
+
+    def restore_ignored_recommendations(self) -> SuiteConfig:
+        """Restaura todas as recomendações previamente ignoradas."""
+        return self.config_store.update(ignored_recommendations=[])
+
+    def get_protection_recommendations(
+        self,
+        *,
+        statuses: dict[str, ModuleStatus] | None = None,
+        cfg: SuiteConfig | None = None,
+        open_pending: list[PendingDecision] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retorna lista estruturada e acionável para melhorar ou corrigir a proteção."""
+        statuses = statuses or self.all_statuses(use_cache=True)
+        cfg = cfg or self.config_store.load()
+        open_pending = open_pending if open_pending is not None else self.pending_store.list_open()
+        ignored = set(cfg.ignored_recommendations)
+        recs: list[dict[str, Any]] = []
+
+        if cfg.is_protection_paused_now():
+            recs.append(
+                {
+                    "rec_id": "protection_paused",
+                    "severity": "critical",
+                    "ignorable": False,
+                    "action": "resume_protection",
+                    "target": cfg.protection_pause_mode,
+                    "until": cfg.protection_paused_until,
+                }
+            )
+
+        paused_apps = [p for p in open_pending if p.kind == "paused_app"]
+        if paused_apps:
+            recs.append(
+                {
+                    "rec_id": "paused_app",
+                    "severity": "critical",
+                    "ignorable": False,
+                    "action": "review_pending",
+                    "target": paused_apps[0].pending_id,
+                    "app_name": paused_apps[0].app_name or "",
+                }
+            )
+        elif open_pending:
+            recs.append(
+                {
+                    "rec_id": "pending_alerts",
+                    "severity": "critical",
+                    "ignorable": False,
+                    "action": "open_notifications",
+                    "count": len(open_pending),
+                }
+            )
+
+        am_st = statuses.get("antimalware")
+        if am_st is not None and am_st.state != ModuleState.AUSENTE:
+            sig = am_st.details.get("signatures", {})
+            if not sig.get("available") or sig.get("stale"):
+                recs.append(
+                    {
+                        "rec_id": "db_outdated",
+                        "severity": "warning",
+                        "ignorable": True,
+                        "action": "update_db",
+                        "stale": bool(sig.get("available")),
+                    }
+                )
+            if am_st.state == ModuleState.VERIFICACAO_INCOMPLETA:
+                recs.append(
+                    {
+                        "rec_id": "scan_incomplete",
+                        "severity": "warning",
+                        "ignorable": True,
+                        "action": "open_scans",
+                    }
+                )
+            if am_st.state == ModuleState.DESATIVADO:
+                recs.append(
+                    {
+                        "rec_id": "enable_antimalware",
+                        "severity": "warning",
+                        "ignorable": True,
+                        "action": "enable_module:antimalware",
+                    }
+                )
+
+        fw_st = statuses.get("firewall")
+        if fw_st is not None and fw_st.state != ModuleState.AUSENTE and fw_st.state == ModuleState.DESATIVADO:
+            recs.append(
+                {
+                    "rec_id": "enable_firewall",
+                    "severity": "warning",
+                    "ignorable": True,
+                    "action": "open_module:firewall",
+                }
+            )
+
+        if am_st is not None and am_st.state != ModuleState.AUSENTE:
+            last_scan = am_st.details.get("last_scan") or {}
+            scan_old = not last_scan.get("finished_at")
+            if last_scan.get("finished_at"):
+                try:
+                    dt = datetime.fromisoformat(str(last_scan["finished_at"]))
+                    age = (datetime.now(tz=dt.tzinfo) - dt).total_seconds()
+                    scan_old = age > 7 * 86400
+                except ValueError:
+                    scan_old = True
+            if scan_old:
+                recs.append(
+                    {
+                        "rec_id": "run_quick_scan",
+                        "severity": "info",
+                        "ignorable": True,
+                        "action": "quick_scan",
+                    }
+                )
+
+        rec_st = statuses.get("recovery")
+        if rec_st is not None and rec_st.state != ModuleState.AUSENTE and rec_st.needs_setup:
+            recs.append(
+                {
+                    "rec_id": "setup_recovery",
+                    "severity": "info",
+                    "ignorable": True,
+                    "action": "open_recovery",
+                }
+            )
+
+        return [r for r in recs if not (r["ignorable"] and r["rec_id"] in ignored)]
+
+    def get_overall_health(
+        self,
+        *,
+        statuses: dict[str, ModuleStatus] | None = None,
+        cfg: SuiteConfig | None = None,
+        open_pending: list[PendingDecision] | None = None,
+    ) -> str:
+        """Retorna estado consolidado para animação e bandeja ('ok' | 'alert' | 'paused')."""
+        cfg = cfg or self.config_store.load()
+        if cfg.is_protection_paused_now():
+            return "paused"
+        statuses = statuses or self.all_statuses(use_cache=True)
+        open_pending = open_pending if open_pending is not None else self.pending_store.list_open()
+        if open_pending:
+            return "alert"
+        for st in statuses.values():
+            if st.state in (
+                ModuleState.DEGRADADO,
+                ModuleState.VERIFICACAO_INCOMPLETA,
+                ModuleState.INDISPONIVEL,
+            ):
+                return "alert"
+        recs = self.get_protection_recommendations(statuses=statuses, cfg=cfg, open_pending=open_pending)
+        if any(r["severity"] in ("critical", "warning") for r in recs):
+            return "alert"
+        return "ok"

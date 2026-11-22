@@ -10,11 +10,13 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from mintsec.formatting import format_bytes, format_local_datetime  # noqa: E402
 from mintsec.services.antimalware import ScanResult  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
+from mintsec_ui.animations import format_eta  # noqa: E402
 from mintsec_ui.dialogs.quarantine_restore import (  # noqa: E402
     confirm_quarantine,
     restore_quarantine_interactive,
@@ -38,6 +40,7 @@ class ScansPage(Gtk.Box):
         self._cancel_event: threading.Event | None = None
         self._scanning = False
         self._last_result: ScanResult | None = None
+        self._last_stats: dict[str, Any] | None = None
         self._last_sched_sig: tuple[Any, ...] | None = None
         self._last_quar_sig: tuple[Any, ...] | None = None
 
@@ -96,6 +99,9 @@ class ScansPage(Gtk.Box):
         self.btn_quick.get_style_context().add_class("mintsec-primary-cta")
         self.btn_quick.connect("clicked", lambda *_: self.start_scan("quick"))
 
+        self.btn_system = Gtk.Button(label="")
+        self.btn_system.connect("clicked", lambda *_: self.start_scan("system"))
+
         self.btn_choose = Gtk.Button(label="")
         self.btn_choose.connect("clicked", self._on_choose_path)
 
@@ -106,6 +112,7 @@ class ScansPage(Gtk.Box):
         self.btn_cancel.connect("clicked", lambda *_: self.cancel_scan())
 
         btn_row.pack_start(self.btn_quick, False, False, 0)
+        btn_row.pack_start(self.btn_system, False, False, 0)
         btn_row.pack_start(self.btn_choose, False, False, 0)
         btn_row.pack_start(self.btn_cancel, False, False, 0)
         left.pack_start(btn_row, False, False, 0)
@@ -119,6 +126,40 @@ class ScansPage(Gtk.Box):
         self._spot_art.set_valign(Gtk.Align.CENTER)
         hero_card.pack_end(self._spot_art, False, False, 0)
         self.scan_tab.pack_start(hero_card, False, False, 0)
+
+        # Card animado de progresso em tempo real (% + ETA + barra)
+        self.progress_revealer = Gtk.Revealer()
+        self.progress_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.progress_revealer.set_transition_duration(180)
+        self.progress_revealer.set_reveal_child(False)
+
+        prog_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        prog_card.get_style_context().add_class("mintsec-card")
+
+        prog_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.progress_phase_lbl = Gtk.Label(label="", xalign=0.0)
+        self.progress_phase_lbl.get_style_context().add_class("mintsec-subtitle")
+        self.progress_pct_lbl = Gtk.Label(label="", xalign=0.0)
+        self.progress_pct_lbl.get_style_context().add_class("mintsec-subtitle")
+        self.progress_eta_lbl = Gtk.Label(label="", xalign=1.0)
+        self.progress_eta_lbl.get_style_context().add_class("mintsec-muted")
+        prog_hdr.pack_start(self.progress_phase_lbl, False, False, 0)
+        prog_hdr.pack_start(self.progress_pct_lbl, True, True, 0)
+        prog_hdr.pack_end(self.progress_eta_lbl, False, False, 0)
+        prog_card.pack_start(prog_hdr, False, False, 0)
+
+        self.progress_bar = Gtk.ProgressBar()
+        self.progress_bar.get_style_context().add_class("mintsec-progress")
+        self.progress_bar.set_show_text(False)
+        prog_card.pack_start(self.progress_bar, False, False, 0)
+
+        self.progress_path_lbl = Gtk.Label(label="", xalign=0.0)
+        self.progress_path_lbl.set_ellipsize(Pango.EllipsizeMode.START)
+        self.progress_path_lbl.get_style_context().add_class("mintsec-muted")
+        prog_card.pack_start(self.progress_path_lbl, False, False, 0)
+
+        self.progress_revealer.add(prog_card)
+        self.scan_tab.pack_start(self.progress_revealer, False, False, 0)
 
         # Opções adicionais recolhidas para manter visual limpo
         self._more_exp = Gtk.Expander(label="")
@@ -135,6 +176,11 @@ class ScansPage(Gtk.Box):
         self.btn_full = Gtk.Button(label="")
         self.btn_full.connect("clicked", lambda *_: self.start_scan("full"))
         full_row.pack_start(self.btn_full, False, False, 0)
+
+        self.btn_open_quarantine = Gtk.Button(label="")
+        self.btn_open_quarantine.connect("clicked", lambda *_: self.app_window.navigate_to("quarantine"))
+        full_row.pack_start(self.btn_open_quarantine, False, False, 0)
+
         more_box.pack_start(full_row, False, False, 0)
         self._more_exp.add(more_box)
         self.scan_tab.pack_start(self._more_exp, False, False, 0)
@@ -193,6 +239,9 @@ class ScansPage(Gtk.Box):
         quick_lbl = tr("scans.btn_quick")
         self.btn_quick.set_label(quick_lbl)
         set_accessible(self.btn_quick, quick_lbl, tr("scans.btn_quick_desc"))
+        sys_lbl = tr("scans.btn_system")
+        self.btn_system.set_label(sys_lbl)
+        set_accessible(self.btn_system, sys_lbl, tr("scans.btn_system_desc"))
         self.btn_choose.set_label(tr("scans.btn_choose"))
         set_accessible(self.btn_choose, tr("scans.btn_choose_a11y"), tr("scans.btn_choose_desc"))
         self.btn_cancel.set_label(tr("common.cancel"))
@@ -204,8 +253,12 @@ class ScansPage(Gtk.Box):
         self._scope_note.set_text(tr("scans.scope_note"))
         self.btn_full.set_label(tr("scans.btn_full"))
         set_accessible(self.btn_full, tr("scans.btn_full_a11y"), tr("scans.btn_full_desc"))
+        self.btn_open_quarantine.set_label(tr("scans.btn_quarantine_page"))
+        set_accessible(self.btn_open_quarantine, tr("scans.btn_quarantine_page"))
 
-        if not self._scanning and self._last_result is None:
+        if self._scanning and self._last_stats is not None:
+            self._apply_stats_ui(self._last_stats)
+        elif not self._scanning and self._last_result is None:
             self.scan_status_lbl.set_text(tr("scans.status_idle"))
         elif self._last_result is not None and not self._scanning:
             self._render_scan_result(self._last_result)
@@ -217,11 +270,14 @@ class ScansPage(Gtk.Box):
         self.sched_scope.remove_all()
         self.sched_scope.append("quick", tr("scans.scope_quick"))
         self.sched_scope.append("full", tr("scans.scope_full"))
+        self.sched_scope.append("system", tr("scans.scope_system_short"))
         self.sched_scope.set_active_id(scope_id)
         set_accessible(self.sched_scope, tr("scans.scope_a11y"), tr("scans.scope_desc"))
 
         freq_id = self.sched_freq.get_active_id() or "weekly"
         self.sched_freq.remove_all()
+        self.sched_freq.append("6h", tr("scans.freq_6h"))
+        self.sched_freq.append("12h", tr("scans.freq_12h"))
         self.sched_freq.append("daily", tr("scans.freq_daily"))
         self.sched_freq.append("weekly", tr("scans.freq_weekly"))
         self.sched_freq.append("monthly", tr("scans.freq_monthly"))
@@ -265,8 +321,11 @@ class ScansPage(Gtk.Box):
             scope_labels = {
                 "quick": tr("scans.sched_scope_quick_short"),
                 "full": tr("scans.sched_scope_full_short"),
+                "system": tr("scans.scope_system_short"),
             }
             freq_labels = {
+                "6h": tr("scans.freq_6h"),
+                "12h": tr("scans.freq_12h"),
                 "daily": tr("scans.freq_daily"),
                 "weekly": tr("scans.freq_weekly"),
                 "monthly": tr("scans.freq_monthly"),
@@ -393,25 +452,48 @@ class ScansPage(Gtk.Box):
             return
 
         self._scanning = True
+        self._last_stats = None
         self._cancel_event = threading.Event()
         self.btn_cancel.set_sensitive(True)
         self.btn_cancel.show()
+        self.progress_bar.set_fraction(0.0)
+        self.progress_phase_lbl.set_text(tr("scans.phase_counting"))
+        self.progress_pct_lbl.set_text("0%")
+        self.progress_eta_lbl.set_text(
+            tr("scans.eta_label", eta=tr("scans.eta_calculating"))
+        )
+        self.progress_path_lbl.set_text("")
+        self.progress_revealer.set_reveal_child(True)
         self.scan_status_lbl.set_text(tr("scans.running_status", count=0))
         self.app_window.set_active_scan_banner(True, tr("scans.running_banner", count=0))
 
         def _worker() -> None:
             last_emit = [0.0]
+            last_phase = [""]
+            saw_stats = [False]
             try:
                 def _prog(count: int, _line: str) -> None:
+                    if saw_stats[0]:
+                        return
                     now = time.monotonic()
-                    if count <= 1 or (now - last_emit[0]) >= 0.10:
+                    if count <= 1 or (now - last_emit[0]) >= 0.12:
                         last_emit[0] = now
                         GLib.idle_add(self._on_scan_progress, count)
+
+                def _stats(stats: dict[str, Any]) -> None:
+                    saw_stats[0] = True
+                    now = time.monotonic()
+                    phase = str(stats.get("phase", ""))
+                    if phase != last_phase[0] or (now - last_emit[0]) >= 0.12 or phase == "done":
+                        last_phase[0] = phase
+                        last_emit[0] = now
+                        GLib.idle_add(self._on_scan_stats, dict(stats))
 
                 res = service.run_scan(
                     scope=scope,
                     paths=custom_paths,
                     on_progress=_prog,
+                    on_stats=_stats,
                     cancel_event=self._cancel_event,
                 )
                 GLib.idle_add(self._on_scan_finished, res, None)
@@ -423,21 +505,69 @@ class ScansPage(Gtk.Box):
     def cancel_scan(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
+            if self._scanning:
+                self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
+
+    def _apply_stats_ui(self, stats: dict[str, Any]) -> None:
+        phase = str(stats.get("phase", "scanning"))
+        cancelling = self._cancel_event is not None and self._cancel_event.is_set()
+        if cancelling or phase == "cancelled":
+            self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
+        elif phase == "counting":
+            self.progress_phase_lbl.set_text(tr("scans.phase_counting"))
+        else:
+            self.progress_phase_lbl.set_text(tr("scans.phase_scanning"))
+
+        pct = float(stats.get("percent", 0.0))
+        scanned = int(stats.get("items_scanned", 0))
+        total = int(stats.get("total_estimated", 0))
+        exact = bool(stats.get("exact_total"))
+        eta_txt = format_eta(stats.get("eta_seconds"))
+        cur_path = str(stats.get("current_path") or "")
+
+        if phase == "counting":
+            self.progress_bar.pulse()
+        else:
+            self.progress_bar.set_fraction(max(0.0, min(1.0, pct / 100.0)))
+
+        if exact and total > 0:
+            pct_line = tr("scans.progress_exact", pct=pct, scanned=scanned, total=total)
+        else:
+            pct_line = tr("scans.progress_approx", pct=pct, scanned=scanned)
+        self.progress_pct_lbl.set_text(pct_line)
+        self.progress_eta_lbl.set_text(tr("scans.eta_label", eta=eta_txt))
+        self.progress_path_lbl.set_text(cur_path)
+
+        banner_path = Path(cur_path).name if cur_path else "…"
+        banner_txt = tr("scans.running_banner_eta", pct=pct, eta=eta_txt, path=banner_path)
+        self.scan_status_lbl.set_text(banner_txt)
+        self.app_window.set_active_scan_banner(True, banner_txt)
+
+    def _on_scan_stats(self, stats: dict[str, Any]) -> bool:
+        if self.app_window._destroyed or not self._scanning:
+            return False
+        self._last_stats = stats
+        self._apply_stats_ui(stats)
+        return False
 
     def _on_scan_progress(self, count: int) -> bool:
-        if self.app_window._destroyed:
+        if self.app_window._destroyed or not self._scanning:
             return False
-        msg = tr("scans.running_status", count=count)
+        self.progress_phase_lbl.set_text(tr("scans.phase_scanning"))
+        self.progress_pct_lbl.set_text(tr("scans.progress_approx", pct=0.0, scanned=count))
+        msg = tr("scans.running_banner", count=count)
         self.scan_status_lbl.set_text(msg)
-        self.app_window.set_active_scan_banner(True, tr("scans.running_banner", count=count))
+        self.app_window.set_active_scan_banner(True, msg)
         return False
 
     def _on_scan_finished(self, result: ScanResult | None, err: str | None) -> bool:
         if self.app_window._destroyed:
             return False
         self._scanning = False
+        self._last_stats = None
         self.btn_cancel.set_sensitive(False)
         self.btn_cancel.hide()
+        self.progress_revealer.set_reveal_child(False)
         self.app_window.set_active_scan_banner(False, "")
         if err is not None or result is None:
             self.scan_status_lbl.set_text(tr("scans.failed_status", err=err))

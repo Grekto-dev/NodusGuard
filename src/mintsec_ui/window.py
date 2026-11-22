@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import gi
@@ -15,16 +16,20 @@ from mintsec.services.catalog import SuiteController  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.dialogs.first_run import FirstRunDialog  # noqa: E402
+from mintsec_ui.dialogs.pause_protection import PauseProtectionDialog  # noqa: E402
 from mintsec_ui.dialogs.paused_app import PausedAppDialog  # noqa: E402
 from mintsec_ui.i18n import set_language, tr  # noqa: E402
 from mintsec_ui.pages.activity import ActivityPage  # noqa: E402
 from mintsec_ui.pages.home import HomePage  # noqa: E402
 from mintsec_ui.pages.module_detail import ModuleDetailPage  # noqa: E402
+from mintsec_ui.pages.notifications import NotificationsPage  # noqa: E402
 from mintsec_ui.pages.protections import ProtectionsPage  # noqa: E402
+from mintsec_ui.pages.quarantine import QuarantinePage  # noqa: E402
 from mintsec_ui.pages.recovery import RecoveryPage  # noqa: E402
 from mintsec_ui.pages.scans import ScansPage  # noqa: E402
 from mintsec_ui.pages.settings import SettingsPage  # noqa: E402
 from mintsec_ui.theme import ThemeManager  # noqa: E402
+from mintsec_ui.tray import NodusGuardTray  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     ASSETS_DIR,
     friendly_module_name,
@@ -35,12 +40,17 @@ from mintsec_ui.widgets import (  # noqa: E402
 NAV_ITEMS = (
     ("home", "nav.home", "go-home-symbolic"),
     ("scans", "nav.scans", "system-search-symbolic"),
+    ("quarantine", "nav.quarantine", "folder-locked-symbolic"),
     ("protections", "nav.protections", "security-high-symbolic"),
     ("recovery", "nav.recovery", "document-revert-symbolic"),
     ("activity", "nav.activity", "view-list-symbolic"),
 )
 
-_ALL_NAV_ITEMS = (*NAV_ITEMS, ("settings", "nav.settings", "emblem-system-symbolic"))
+_ALL_NAV_ITEMS = (
+    *NAV_ITEMS,
+    ("notifications", "nav.notifications", "preferences-system-notifications-symbolic"),
+    ("settings", "nav.settings", "emblem-system-symbolic"),
+)
 
 
 class SuiteWindow(Gtk.ApplicationWindow):
@@ -64,6 +74,11 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.current_page = "home"
         self._is_compact = False
         self._destroyed = False
+        self._quitting = False
+        self._high_contrast = False
+        self._auto_scanning = False
+        self._anim_sig: int | None = None
+        self._bg_timer_id: int | None = None
         self._cached_statuses: dict[str, Any] | None = None
         self._sidebar_buttons: dict[str, Gtk.Button] = {}
         self._sidebar_labels: dict[str, Gtk.Label] = {}
@@ -114,10 +129,28 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self._sidebar_buttons[page_id] = btn
             self._sidebar_labels[page_id] = lbl
 
+        footer_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        footer_row.get_style_context().add_class("mintsec-sidebar-footer")
+
+        self.bell_btn = Gtk.Button()
+        self.bell_btn.get_style_context().add_class("mintsec-sidebar-bell")
+        bell_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        bell_icon = Gtk.Image.new_from_icon_name(
+            "preferences-system-notifications-symbolic", Gtk.IconSize.MENU
+        )
+        bell_icon.set_pixel_size(16)
+        self.bell_count_lbl = Gtk.Label(label="0")
+        bell_box.pack_start(bell_icon, False, False, 0)
+        bell_box.pack_start(self.bell_count_lbl, False, False, 0)
+        self.bell_btn.add(bell_box)
+        self.bell_btn.connect("clicked", lambda *_: self.navigate_to("notifications"))
+
         settings_btn, settings_lbl = self._make_nav_button(
             "settings", tr("nav.settings"), "emblem-system-symbolic"
         )
-        self.sidebar.pack_end(settings_btn, False, False, 0)
+        footer_row.pack_start(self.bell_btn, False, False, 0)
+        footer_row.pack_start(settings_btn, True, True, 0)
+        self.sidebar.pack_end(footer_row, False, False, 0)
         self._sidebar_buttons["settings"] = settings_btn
         self._sidebar_labels["settings"] = settings_lbl
 
@@ -161,17 +194,6 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.page_title_lbl.get_style_context().add_class("mintsec-page-title")
         header_row.pack_start(self.page_title_lbl, True, True, 0)
 
-        self.bell_btn = Gtk.Button()
-        self.bell_btn.get_style_context().add_class("mintsec-bell-btn")
-        bell_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        bell_icon = Gtk.Image.new_from_icon_name("preferences-system-notifications-symbolic", Gtk.IconSize.MENU)
-        self.bell_count_lbl = Gtk.Label(label="0")
-        bell_box.pack_start(bell_icon, False, False, 0)
-        bell_box.pack_start(self.bell_count_lbl, False, False, 0)
-        self.bell_btn.add(bell_box)
-        self.bell_btn.connect("clicked", lambda *_: self.navigate_to("activity", tab="pending"))
-        header_row.pack_start(self.bell_btn, False, False, 0)
-
         self.more_btn = Gtk.MenuButton()
         self.more_btn.get_style_context().add_class("mintsec-icon-btn")
         self.more_btn.set_image(
@@ -211,25 +233,47 @@ class SuiteWindow(Gtk.ApplicationWindow):
 
         self.home_page = HomePage(self)
         self.scans_page = ScansPage(self)
+        self.quarantine_page = QuarantinePage(self)
         self.protections_page = ProtectionsPage(self)
         self.module_detail_page = ModuleDetailPage(self)
         self.recovery_page = RecoveryPage(self)
         self.activity_page = ActivityPage(self)
+        self.notifications_page = NotificationsPage(self)
         self.settings_page = SettingsPage(self)
 
         self.pages: dict[str, Any] = {
             "home": self.home_page,
             "scans": self.scans_page,
+            "quarantine": self.quarantine_page,
             "protections": self.protections_page,
             "module_detail": self.module_detail_page,
             "recovery": self.recovery_page,
             "activity": self.activity_page,
+            "notifications": self.notifications_page,
             "settings": self.settings_page,
         }
         for page_id, widget in self.pages.items():
             self.stack.add_named(widget, page_id)
 
+        self.tray = NodusGuardTray(
+            on_open=self.present_from_tray,
+            on_pause=self.open_pause_dialog,
+            on_resume=self.resume_protection,
+            on_settings=lambda: (self.present_from_tray(), self.navigate_to("settings", tab="general")),
+            on_toggle_dnd=self.set_do_not_disturb,
+            on_toggle_game_mode=self.set_game_mode,
+            on_about=lambda: (self.present_from_tray(), self.navigate_to("settings", tab="about")),
+            on_quit=self.quit_application,
+        )
+
+        gtk_settings = Gtk.Settings.get_default()
+        if gtk_settings is not None:
+            self._anim_sig = gtk_settings.connect(
+                "notify::gtk-enable-animations", lambda *_: self._sync_animations_pref()
+            )
+
         self.connect("size-allocate", self._on_size_allocate)
+        self.connect("delete-event", self._on_delete_event)
         self.connect("destroy", self._on_destroy)
         self.show_all()
         self.apply_theme()
@@ -237,14 +281,47 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self._update_compact_mode(initial_width)
 
         if self.controller.is_live_host_runner:
+            try:
+                self.controller.clear_until_restart_pause_on_startup()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.controller.sync_autostart()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.controller.ensure_default_automation()
+            except Exception:  # noqa: BLE001
+                pass
+            self._bg_timer_id = GLib.timeout_add_seconds(60, self._on_periodic_tick)
             self._refresh_bell()
             self.home_page.refresh(statuses=None)
+            self.sync_tray(statuses=None)
             self._schedule_async_refresh(force=True)
         else:
             self.refresh_all()
 
+    def _on_delete_event(self, *_args: object) -> bool:
+        if getattr(self, "tray", None) is not None and self.tray.has_active_backend and not self._quitting:
+            self.hide()
+            self.home_page.set_animations_active(False)
+            return True
+        return False
+
     def _on_destroy(self, *_args: object) -> None:
         self._destroyed = True
+        if self._bg_timer_id is not None:
+            GLib.source_remove(self._bg_timer_id)
+            self._bg_timer_id = None
+        gtk_settings = Gtk.Settings.get_default()
+        if gtk_settings is not None and self._anim_sig is not None:
+            try:
+                gtk_settings.disconnect(self._anim_sig)
+            except Exception:  # noqa: BLE001
+                pass
+            self._anim_sig = None
+        if getattr(self, "tray", None) is not None:
+            self.tray.destroy()
         self.scans_page.cancel_scan()
         self.theme_manager.cleanup()
 
@@ -331,6 +408,9 @@ class SuiteWindow(Gtk.ApplicationWindow):
             if hasattr(page, "apply_language"):
                 page.apply_language()
 
+        if getattr(self, "tray", None) is not None:
+            self.tray.apply_language()
+
         self.refresh_all(force=False)
 
     def _update_current_page_title(self) -> None:
@@ -349,15 +429,44 @@ class SuiteWindow(Gtk.ApplicationWindow):
                 ctx.add_class("mintsec-active-nav")
             else:
                 ctx.remove_class("mintsec-active-nav")
+        bell_ctx = self.bell_btn.get_style_context()
+        if page_id == "notifications":
+            bell_ctx.add_class("mintsec-active-nav")
+        else:
+            bell_ctx.remove_class("mintsec-active-nav")
+
+    def _sync_animations_pref(self) -> None:
+        gtk_settings = Gtk.Settings.get_default()
+        anim_enabled = True
+        if gtk_settings is not None:
+            try:
+                anim_enabled = bool(gtk_settings.get_property("gtk-enable-animations"))
+            except Exception:  # noqa: BLE001
+                anim_enabled = True
+        if anim_enabled and not self._high_contrast:
+            self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+            self.stack.set_transition_duration(160)
+        else:
+            self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+            self.stack.set_transition_duration(0)
+        self.home_page.set_animations_active(
+            self.current_page == "home"
+            and self.get_visible()
+            and not self._high_contrast
+            and anim_enabled
+        )
 
     def apply_theme(self) -> None:
         cfg = self.controller.config_store.load()
-        self.theme_manager.apply(
+        info = self.theme_manager.apply(
             theme_mode=cfg.theme_mode,
             theme_preset=cfg.theme_preset,
             probe_widget=self,
             screen=self.get_screen(),
         )
+        self._high_contrast = info.mode == "high_contrast"
+        self.home_page.set_high_contrast(self._high_contrast)
+        self._sync_animations_pref()
 
     def set_active_scan_banner(self, visible: bool, text: str) -> None:
         if visible:
@@ -390,6 +499,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
     def _apply_async_statuses(self, statuses: dict[str, Any]) -> None:
         self._cached_statuses = statuses
         self._refresh_bell()
+        self.sync_tray(statuses=statuses)
         page_widget = self.pages.get(self.current_page)
         if page_widget is not None:
             self._invoke_page_refresh(page_widget, statuses=statuses)
@@ -425,6 +535,10 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self.recovery_page.select_tab(tab or "files", path=path)
         elif page_id == "activity" and tab:
             self.activity_page.select_tab(tab)
+        elif page_id == "settings" and tab:
+            self.settings_page.select_tab(tab)
+
+        self._sync_animations_pref()
 
         if self.controller.is_live_host_runner:
             cached = self._cached_statuses or self.controller.get_cached_statuses()
@@ -446,6 +560,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.stack.set_visible_child_name("module_detail")
         self._update_current_page_title()
         self._update_nav_highlight("module_detail")
+        self._sync_animations_pref()
         vadj = self.scroller.get_vadjustment()
         if vadj is not None and vadj.get_value() != 0.0:
             vadj.set_value(0.0)
@@ -475,6 +590,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
     def refresh_all(self, *, force: bool = True) -> None:
         self._refresh_bell()
         if self.controller.is_live_host_runner:
+            self.sync_tray(statuses=self._cached_statuses)
             page_widget = self.pages.get(self.current_page)
             if page_widget is not None:
                 self._invoke_page_refresh(page_widget, statuses=self._cached_statuses)
@@ -483,9 +599,137 @@ class SuiteWindow(Gtk.ApplicationWindow):
                 self._schedule_async_refresh(force=True)
             return
 
+        self.sync_tray()
         page_widget = self.pages.get(self.current_page)
         if page_widget is not None:
             page_widget.refresh()
+
+    def sync_tray(self, statuses: dict[str, Any] | None = None) -> None:
+        if getattr(self, "tray", None) is None:
+            return
+        cfg = self.controller.config_store.load()
+        paused = cfg.is_protection_paused_now()
+        resolved = statuses if statuses is not None else (
+            self._cached_statuses
+            if self.controller.is_live_host_runner
+            else self.controller.all_statuses(use_cache=True)
+        )
+        if resolved is None:
+            health = "paused" if paused else ("alert" if self.controller.pending_store.count_open() > 0 else "ok")
+            rec_cnt = 1 if health != "ok" else 0
+        else:
+            recs = self.controller.get_protection_recommendations(statuses=resolved, cfg=cfg)
+            health = self.controller.get_overall_health(statuses=resolved, cfg=cfg)
+            rec_cnt = len(recs)
+        self.tray.update_status(
+            health,
+            paused=paused,
+            dnd=cfg.do_not_disturb,
+            game_mode=cfg.game_mode,
+            rec_count=rec_cnt,
+        )
+
+    def present_from_tray(self) -> None:
+        self.show()
+        self.present()
+        self._sync_animations_pref()
+
+    def open_pause_dialog(self) -> None:
+        self.present_from_tray()
+        dlg = PauseProtectionDialog(self)
+        resp = dlg.run()
+        mode, minutes = dlg.get_selection()
+        dlg.destroy()
+        if resp == Gtk.ResponseType.OK:
+            self.controller.pause_protection(mode=mode, minutes=minutes)
+            self.refresh_all(force=False)
+
+    def resume_protection(self) -> None:
+        self.controller.resume_protection()
+        self.refresh_all(force=False)
+
+    def set_do_not_disturb(self, enabled: bool) -> None:
+        self.controller.config_store.update(do_not_disturb=bool(enabled))
+        self.notifications_page._last_sig = None
+        self.settings_page.refresh()
+        self.refresh_all(force=False)
+
+    def set_game_mode(self, enabled: bool) -> None:
+        self.controller.config_store.update(game_mode=bool(enabled))
+        self.notifications_page._last_sig = None
+        self.settings_page.refresh()
+        self.refresh_all(force=False)
+
+    def trigger_db_update(self) -> None:
+        btn = getattr(self.home_page, "update_db_btn", None)
+        if btn is not None:
+            btn.set_sensitive(False)
+
+        def _worker() -> None:
+            ok = False
+            err_msg = ""
+            try:
+                res = self.controller.antimalware.update_signatures()
+                ok = bool(res.get("ok"))
+                if not ok:
+                    err_msg = str(res.get("stderr") or res.get("stdout") or "freshclam failed")
+            except Exception as exc:  # noqa: BLE001
+                err_msg = str(exc)
+
+            def _done() -> bool:
+                if self._destroyed:
+                    return False
+                if btn is not None:
+                    btn.set_sensitive(True)
+                if not ok and err_msg:
+                    self.scans_page.scan_status_lbl.set_text(
+                        tr("win.db_update_failed", err=err_msg)
+                    )
+                else:
+                    self.scans_page.scan_status_lbl.set_text(tr("win.db_update_done"))
+                self.refresh_all(force=True)
+                return False
+
+            GLib.idle_add(_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_periodic_tick(self) -> bool:
+        if self._destroyed:
+            self._bg_timer_id = None
+            return False
+        if self.controller.check_pause_expiry():
+            self.refresh_all(force=False)
+        if (
+            not self.scans_page._scanning
+            and not self._auto_scanning
+            and self.controller.is_auto_scan_due()
+        ):
+            self._auto_scanning = True
+
+            def _bg_scan() -> None:
+                try:
+                    self.controller.antimalware.run_scan(scope="quick")
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    def _done_auto() -> bool:
+                        self._auto_scanning = False
+                        if not self._destroyed:
+                            self.refresh_all(force=True)
+                        return False
+
+                    GLib.idle_add(_done_auto)
+
+            threading.Thread(target=_bg_scan, daemon=True).start()
+        return True
+
+    def quit_application(self) -> None:
+        self._quitting = True
+        app = self.get_application()
+        self.destroy()
+        if app is not None:
+            app.quit()
 
     def _refresh_bell(self) -> None:
         count = self.controller.pending_store.count_open()
@@ -500,6 +744,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
             tr("win.bell_a11y", count=count),
             tr("win.bell_desc"),
         )
+        self.sync_tray(statuses=self._cached_statuses if self.controller.is_live_host_runner else None)
 
     def open_first_run_wizard(self) -> None:
         dlg = FirstRunDialog(self, self.controller)

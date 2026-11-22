@@ -58,12 +58,15 @@ def _pick_free_display() -> str:
 class H8UiTests(unittest.TestCase):
     xephyr_proc: subprocess.Popen[str] | None = None
     orig_display: str | None = None
+    orig_tray: str | None = None
     tmp_dir: tempfile.TemporaryDirectory[str] | None = None
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.tmp_dir = tempfile.TemporaryDirectory(prefix="mintsec-h8-")
         cls.orig_display = os.environ.get("DISPLAY")
+        cls.orig_tray = os.environ.get("MINTSEC_DISABLE_TRAY")
+        os.environ["MINTSEC_DISABLE_TRAY"] = "1"
         if not os.environ.get("MINTSEC_XEPHYR_ACTIVE"):
             disp = _pick_free_display()
             cls.xephyr_proc = subprocess.Popen(
@@ -97,6 +100,10 @@ class H8UiTests(unittest.TestCase):
                 cls.xephyr_proc.kill()
         if cls.orig_display is not None:
             os.environ["DISPLAY"] = cls.orig_display
+        if cls.orig_tray is None:
+            os.environ.pop("MINTSEC_DISABLE_TRAY", None)
+        else:
+            os.environ["MINTSEC_DISABLE_TRAY"] = cls.orig_tray
         if cls.tmp_dir is not None:
             cls.tmp_dir.cleanup()
 
@@ -261,7 +268,16 @@ class H8UiTests(unittest.TestCase):
                     found.extend(_collect_interactive(ch))
             return found
 
-        for page_name in ("home", "scans", "protections", "recovery", "activity", "settings"):
+        for page_name in (
+            "home",
+            "scans",
+            "quarantine",
+            "protections",
+            "recovery",
+            "activity",
+            "notifications",
+            "settings",
+        ):
             win.navigate_to(page_name)
             self._flush_gtk(40)
             for widget in _collect_interactive(win.pages[page_name]):
@@ -393,7 +409,16 @@ class H8UiTests(unittest.TestCase):
 
         # Latência de troca de aba/página
         tab_latencies_ms: dict[str, float] = {}
-        for page_id in ("scans", "protections", "recovery", "activity", "settings", "home"):
+        for page_id in (
+            "scans",
+            "quarantine",
+            "protections",
+            "recovery",
+            "activity",
+            "notifications",
+            "settings",
+            "home",
+        ):
             t0 = time.perf_counter()
             win.navigate_to(page_id)
             while Gtk.events_pending():
@@ -402,7 +427,10 @@ class H8UiTests(unittest.TestCase):
             tab_latencies_ms[page_id] = round(elapsed_ms, 2)
             self.assertLess(elapsed_ms, 300.0)
 
-        # Estabiliza e mede repinturas durante 3.0s ociosos
+        # Estabiliza e mede repinturas durante 3.0s ociosos (com animações desligadas pelo SO)
+        gtk_settings = Gtk.Settings.get_default()
+        orig_anim = bool(gtk_settings.get_property("gtk-enable-animations"))
+        gtk_settings.set_property("gtk-enable-animations", False)
         self._flush_gtk(300)
         draw_count = 0
 
@@ -421,6 +449,7 @@ class H8UiTests(unittest.TestCase):
                 time.sleep(0.02)
         finally:
             win.disconnect(handler_id)
+            gtk_settings.set_property("gtk-enable-animations", orig_anim)
 
         self.assertEqual(
             draw_count,

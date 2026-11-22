@@ -205,6 +205,17 @@ def build_all() -> list[Path]:
                 icon_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(icon_src, icon_dir / "nodusguard.png")
 
+        tray_dir = core_dir / "usr/share/icons/hicolor/48x48/apps"
+        tray_dir.mkdir(parents=True, exist_ok=True)
+        for tray_name in (
+            "nodusguard_tray_ok.png",
+            "nodusguard_tray_alert.png",
+            "nodusguard_tray_paused.png",
+        ):
+            tray_src = ROOT / "src/mintsec_ui/assets" / tray_name
+            if tray_src.is_file():
+                shutil.copy2(tray_src, tray_dir / tray_name)
+
         apps_dir = core_dir / "usr/share/applications"
         apps_dir.mkdir(parents=True, exist_ok=True)
         (apps_dir / "nodusguard.desktop").write_text(
@@ -223,6 +234,8 @@ def build_all() -> list[Path]:
         )
 
         suggests_all = (
+            "gir1.2-xapp-1.0, "
+            "gir1.2-ayatanaappindicator3-0.1, "
             "mint-security-suite-antimalware, "
             "mint-security-suite-firewall, "
             "mint-security-suite-backup, "

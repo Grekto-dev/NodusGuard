@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ VALID_DENSITIES = {"essential", "detailed"}
 VALID_PAUSE_POLICIES = {"unset", "alert_only", "auto_pause"}
 VALID_FIREWALL_OUTBOUND = {"monitor_only", "block_per_app"}
 VALID_LANGUAGES = {"en", "pt_BR"}
+VALID_PAUSE_MODES = {"none", "timed", "until_restart", "indefinite"}
+VALID_AUTO_SCAN_INTERVALS = {"6h", "12h", "daily", "weekly"}
 
 
 @dataclass
@@ -38,6 +41,18 @@ class SuiteConfig:
     removable_media_prompt: bool = True
     enabled_modules: dict[str, bool] = field(default_factory=dict)
 
+    # Inicialização, agendamento automático, modos e pausa de proteção
+    autostart_enabled: bool = True
+    auto_quick_scan_enabled: bool = True
+    auto_quick_scan_interval: str = "daily"
+    auto_db_update_enabled: bool = True
+    do_not_disturb: bool = False
+    game_mode: bool = False
+    protection_paused: bool = False
+    protection_pause_mode: str = "none"
+    protection_paused_until: str | None = None
+    ignored_recommendations: list[str] = field(default_factory=list)
+
     def validate(self) -> None:
         """Garante que os valores configurados pertencem aos conjuntos aprovados."""
         if self.theme_mode not in VALID_THEME_MODES:
@@ -52,6 +67,27 @@ class SuiteConfig:
             raise ValueError(f"pause_policy inválida: {self.pause_policy}")
         if self.firewall_outbound_mode not in VALID_FIREWALL_OUTBOUND:
             raise ValueError(f"firewall_outbound_mode inválido: {self.firewall_outbound_mode}")
+        if self.auto_quick_scan_interval not in VALID_AUTO_SCAN_INTERVALS:
+            raise ValueError(f"auto_quick_scan_interval inválido: {self.auto_quick_scan_interval}")
+        if self.protection_pause_mode not in VALID_PAUSE_MODES:
+            raise ValueError(f"protection_pause_mode inválido: {self.protection_pause_mode}")
+
+    def is_protection_paused_now(self, now: datetime | None = None) -> bool:
+        """Informa se a proteção está atualmente pausada levando em conta expiração temporizada."""
+        if not self.protection_paused:
+            return False
+        if self.protection_pause_mode == "timed":
+            if not self.protection_paused_until:
+                return False
+            try:
+                until_dt = datetime.fromisoformat(self.protection_paused_until)
+            except ValueError:
+                return False
+            ref = now or datetime.now(tz=until_dt.tzinfo)
+            if ref.tzinfo is None and until_dt.tzinfo is not None:
+                ref = ref.replace(tzinfo=until_dt.tzinfo)
+            return ref < until_dt
+        return self.protection_pause_mode in {"until_restart", "indefinite"}
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -59,6 +95,7 @@ class SuiteConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SuiteConfig:
+        raw_until = data.get("protection_paused_until")
         cfg = cls(
             theme_mode=str(data.get("theme_mode", "follow_system")),
             theme_preset=str(data.get("theme_preset", "lavender")),
@@ -71,6 +108,16 @@ class SuiteConfig:
             notifications_grouped=bool(data.get("notifications_grouped", True)),
             removable_media_prompt=bool(data.get("removable_media_prompt", True)),
             enabled_modules=dict(data.get("enabled_modules", {})),
+            autostart_enabled=bool(data.get("autostart_enabled", True)),
+            auto_quick_scan_enabled=bool(data.get("auto_quick_scan_enabled", True)),
+            auto_quick_scan_interval=str(data.get("auto_quick_scan_interval", "daily")),
+            auto_db_update_enabled=bool(data.get("auto_db_update_enabled", True)),
+            do_not_disturb=bool(data.get("do_not_disturb", False)),
+            game_mode=bool(data.get("game_mode", False)),
+            protection_paused=bool(data.get("protection_paused", False)),
+            protection_pause_mode=str(data.get("protection_pause_mode", "none")),
+            protection_paused_until=str(raw_until) if raw_until else None,
+            ignored_recommendations=[str(x) for x in data.get("ignored_recommendations", [])],
         )
         cfg.validate()
         return cfg

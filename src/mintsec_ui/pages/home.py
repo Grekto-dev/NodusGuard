@@ -1,4 +1,4 @@
-"""Página Início do NodusGuard: hero acolhedor com ilustração, atalhos e interruptores diretos."""
+"""Página Início do NodusGuard: animação Cairo verde/vermelha, timestamps e recomendações."""
 
 from __future__ import annotations
 
@@ -16,21 +16,17 @@ from mintsec.contracts import ModuleState  # noqa: E402
 from mintsec.formatting import format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.actions import handle_module_switch, trigger_module_install  # noqa: E402
+from mintsec_ui.animations import ProtectionStatusCanvas  # noqa: E402
 from mintsec_ui.i18n import tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
     clear_container,
-    friendly_cta_label,
     friendly_module_name,
     friendly_state_text,
-    friendly_verdict_text,
-    load_pixbuf,
     make_empty_state,
     make_icon_chip,
-    make_illustration,
     make_section_header,
 )
-
 
 CARD_ICON_MAP: dict[str, tuple[str, str]] = {
     "scan": ("system-search-symbolic", "accent"),
@@ -48,33 +44,39 @@ CARD_KEY_MAP: dict[str, tuple[str, str, str]] = {
 
 
 class HomePage(Gtk.Box):
-    """Página inicial minimalista focada em ativação rápida e clareza para usuário leigo."""
+    """Painel inicial minimalista com animação verde/vermelha e recomendações acionáveis."""
 
     def __init__(self, app_window: Any) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.app_window = app_window
         self.set_margin_top(2)
         self.set_margin_bottom(14)
         self._last_render_sig: tuple[Any, ...] | None = None
-        self._hero_art_name = "hero_welcome.png"
+        self._cta_action: str | None = None
+        self._cta_target: str | None = None
 
-        # 1. Hero Card com ilustração amigável Qwen Image 2.1 + estado + botão único
-        self.status_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        # 1. Hero Card com animação vetorial ultra-light + timestamps + recomendações
+        self.status_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.status_card.get_style_context().add_class("mintsec-hero-card")
+        self.status_card.get_style_context().add_class("mintsec-hero-ok")
         self.pack_start(self.status_card, False, False, 0)
 
-        left_hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        left_hero.set_valign(Gtk.Align.CENTER)
+        self.hero_top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        self.status_canvas = ProtectionStatusCanvas()
+        self.status_canvas.set_size_request(210, 168)
+        self.hero_top_row.pack_start(self.status_canvas, False, False, 0)
 
-        top_status = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        right_hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        right_hero.set_valign(Gtk.Align.CENTER)
+
+        top_status = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.shield_icon = Gtk.Image.new_from_icon_name("security-high-symbolic", Gtk.IconSize.DIALOG)
         self.shield_icon.set_pixel_size(52)
-        self.shield_icon.set_valign(Gtk.Align.CENTER)
-        self.shield_icon.get_style_context().add_class("mintsec-shield-badge")
+        self.shield_icon.set_no_show_all(True)
+        self.shield_icon.hide()
         top_status.pack_start(self.shield_icon, False, False, 0)
 
         status_text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        status_text_box.set_valign(Gtk.Align.CENTER)
         self.headline_label = Gtk.Label(label="", xalign=0.0)
         self.headline_label.set_line_wrap(True)
         self.headline_label.get_style_context().add_class("mintsec-hero-title")
@@ -84,26 +86,60 @@ class HomePage(Gtk.Box):
         status_text_box.pack_start(self.headline_label, False, False, 0)
         status_text_box.pack_start(self.evidence_label, False, False, 0)
         top_status.pack_start(status_text_box, True, True, 0)
-        left_hero.pack_start(top_status, False, False, 0)
+        right_hero.pack_start(top_status, False, False, 0)
 
         cta_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.primary_cta_btn = Gtk.Button(label=tr("cta.protect_now"))
+        self.primary_cta_btn = Gtk.Button(label=tr("home.cta_quick_scan"))
         self.primary_cta_btn.get_style_context().add_class("mintsec-primary-cta")
         self.primary_cta_btn.set_valign(Gtk.Align.CENTER)
         self.primary_cta_btn.set_no_show_all(True)
         self.primary_cta_btn.connect("clicked", self._on_primary_cta)
         cta_row.pack_start(self.primary_cta_btn, False, False, 0)
-        left_hero.pack_start(cta_row, False, False, 0)
 
-        self.status_card.pack_start(left_hero, True, True, 0)
+        self.update_db_btn = Gtk.Button(label=tr("home.cta_update_db"))
+        self.update_db_btn.set_valign(Gtk.Align.CENTER)
+        self.update_db_btn.connect("clicked", lambda *_: self.app_window.trigger_db_update())
+        set_accessible(self.update_db_btn, tr("home.cta_update_db"))
+        cta_row.pack_start(self.update_db_btn, False, False, 0)
+        right_hero.pack_start(cta_row, False, False, 0)
 
-        self.hero_art = make_illustration(
-            "hero_welcome.png",
-            116,
-            fallback_icon="security-high-symbolic",
-        )
-        self.hero_art.set_valign(Gtk.Align.CENTER)
-        self.status_card.pack_end(self.hero_art, False, False, 0)
+        self.meta_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.last_scan_pill, self.last_scan_val_lbl = self._make_meta_chip("system-search-symbolic")
+        self.last_db_pill, self.last_db_val_lbl = self._make_meta_chip("software-update-available-symbolic")
+        self.meta_row.pack_start(self.last_scan_pill, False, False, 0)
+        self.meta_row.pack_start(self.last_db_pill, False, False, 0)
+        right_hero.pack_start(self.meta_row, False, False, 0)
+
+        self.hero_top_row.pack_start(right_hero, True, True, 0)
+        self.status_card.pack_start(self.hero_top_row, False, False, 0)
+
+        hero_div = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        hero_div.get_style_context().add_class("mintsec-divider")
+        self.status_card.pack_start(hero_div, False, False, 0)
+
+        self.recs_revealer = Gtk.Revealer()
+        self.recs_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.recs_revealer.set_transition_duration(180)
+        self.recs_revealer.set_reveal_child(True)
+
+        recs_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        recs_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.recs_heading_lbl = Gtk.Label(label="", xalign=0.0)
+        self.recs_heading_lbl.get_style_context().add_class("mintsec-subtitle")
+        recs_hdr.pack_start(self.recs_heading_lbl, True, True, 0)
+
+        self.restore_ignored_btn = Gtk.Button(label=tr("home.recs_restore_btn"))
+        self.restore_ignored_btn.get_style_context().add_class("mintsec-ghost-btn")
+        self.restore_ignored_btn.set_no_show_all(True)
+        set_accessible(self.restore_ignored_btn, tr("home.recs_restore_btn"))
+        self.restore_ignored_btn.connect("clicked", self._on_restore_ignored)
+        recs_hdr.pack_start(self.restore_ignored_btn, False, False, 0)
+        recs_wrap.pack_start(recs_hdr, False, False, 0)
+
+        self.recs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        recs_wrap.pack_start(self.recs_box, False, False, 0)
+        self.recs_revealer.add(recs_wrap)
+        self.status_card.pack_start(self.recs_revealer, False, False, 0)
 
         # 2. Três cartões de ação rápida (visíveis acima da dobra em 1366x768)
         self.cards_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -138,11 +174,30 @@ class HomePage(Gtk.Box):
         self.in_use_card.get_style_context().add_class("mintsec-list-card")
         self.bottom_box.pack_start(self.in_use_card, True, True, 0)
 
-        self._cta_action: str | None = None
-        self._cta_target: str | None = None
+    def _make_meta_chip(self, icon_name: str) -> tuple[Gtk.Box, Gtk.Label]:
+        pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        pill.get_style_context().add_class("mintsec-meta-pill")
+        ic = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        ic.set_pixel_size(14)
+        lbl = Gtk.Label(label="", xalign=0.0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        pill.pack_start(ic, False, False, 0)
+        pill.pack_start(lbl, False, False, 0)
+        return pill, lbl
+
+    def set_animations_active(self, active: bool) -> None:
+        self.status_canvas.set_active_page(active)
+
+    def set_high_contrast(self, high_contrast: bool) -> None:
+        self.status_canvas.set_high_contrast(high_contrast)
 
     def apply_language(self) -> None:
         """Reaplica idioma nos textos fixos e invalida assinatura visual."""
+        self.update_db_btn.set_label(tr("home.cta_update_db"))
+        set_accessible(self.update_db_btn, tr("home.cta_update_db"))
+        self.restore_ignored_btn.set_label(tr("home.recs_restore_btn"))
+        set_accessible(self.restore_ignored_btn, tr("home.recs_restore_btn"))
+
         children = self._cov_hdr.get_children()
         if children and isinstance(children[0], Gtk.Label):
             children[0].set_text(tr("home.protections_title"))
@@ -152,15 +207,14 @@ class HomePage(Gtk.Box):
         self._last_render_sig = None
 
     def set_compact(self, compact: bool) -> None:
-        """Adapta escudo, ilustração e cartões para telas compactas (ex.: 1024x600)."""
+        """Adapta escudo, animação e cartões para telas compactas (ex.: 1024x600)."""
         self.shield_icon.set_pixel_size(36 if compact else 52)
-        if compact:
-            self.hero_art.hide()
-        else:
-            pix = load_pixbuf(self._hero_art_name, 116)
-            if pix is not None:
-                self.hero_art.set_from_pixbuf(pix)
-            self.hero_art.show()
+        self.status_canvas.set_compact(compact)
+        if not compact:
+            self.status_canvas.set_size_request(210, 168)
+        self.meta_row.set_orientation(
+            Gtk.Orientation.VERTICAL if compact else Gtk.Orientation.HORIZONTAL
+        )
         self.cards_box.set_orientation(
             Gtk.Orientation.VERTICAL if compact else Gtk.Orientation.HORIZONTAL
         )
@@ -168,27 +222,110 @@ class HomePage(Gtk.Box):
             Gtk.Orientation.VERTICAL if compact else Gtk.Orientation.HORIZONTAL
         )
 
-    def _update_shield_and_art(self, severity: str) -> None:
-        ctx = self.shield_icon.get_style_context()
-        for cls in ("mintsec-shield-ok", "mintsec-shield-warn", "mintsec-shield-crit"):
-            ctx.remove_class(cls)
-        if severity == "ok":
-            ctx.add_class("mintsec-shield-ok")
-            art_name = "hero_protected.png"
-        elif severity == "warning":
-            ctx.add_class("mintsec-shield-warn")
-            art_name = "hero_welcome.png"
-        elif severity == "critical":
-            ctx.add_class("mintsec-shield-crit")
-            art_name = "hero_welcome.png"
-        else:
-            art_name = "hero_welcome.png"
+    def _apply_health_style(self, health: str) -> None:
+        ctx = self.status_card.get_style_context()
+        ctx.remove_class("mintsec-hero-ok")
+        ctx.remove_class("mintsec-hero-alert")
+        ctx.add_class("mintsec-hero-ok" if health == "ok" else "mintsec-hero-alert")
+        self.status_canvas.set_status(health)
 
-        if art_name != self._hero_art_name:
-            self._hero_art_name = art_name
-            pix = load_pixbuf(art_name, 116)
-            if pix is not None:
-                self.hero_art.set_from_pixbuf(pix)
+    def _update_shield_icon_name(self, health: str) -> None:
+        icon_name = "security-high-symbolic" if health == "ok" else "security-low-symbolic"
+        self.shield_icon.set_from_icon_name(icon_name, Gtk.IconSize.DIALOG)
+
+    def _describe_recommendation(self, rec: dict[str, Any], *, has_last_scan: bool) -> tuple[str, str, str, str]:
+        rid = rec["rec_id"]
+        if rid == "protection_paused":
+            return tr("home.rec_paused_title"), tr("home.rec_paused_desc"), tr("home.rec_action_resume"), "crit"
+        if rid == "paused_app":
+            app = rec.get("app_name") or friendly_module_name("recovery", "Recovery")
+            return tr("home.rec_pending_title", count=1), f"{app} — {tr('home.rec_pending_desc')}", tr("home.rec_action_review"), "crit"
+        if rid == "pending_alerts":
+            cnt = int(rec.get("count", 1))
+            return tr("home.rec_pending_title", count=cnt), tr("home.rec_pending_desc"), tr("home.rec_action_review"), "crit"
+        if rid == "db_outdated":
+            return tr("home.rec_db_stale_title"), tr("home.rec_db_stale_desc"), tr("home.rec_action_update_db"), "warn"
+        if rid == "scan_incomplete":
+            return tr("home.rec_scan_stale_title"), tr("home.rec_scan_stale_desc"), tr("home.rec_action_scan"), "warn"
+        if rid == "enable_antimalware":
+            return tr("home.rec_mod_title", name=friendly_module_name("antimalware", "Antimalware")), tr("home.rec_mod_desc"), tr("home.rec_action_fix_mod"), "warn"
+        if rid == "enable_firewall":
+            return tr("home.rec_mod_title", name=friendly_module_name("firewall", "Firewall")), tr("home.rec_mod_desc"), tr("home.rec_action_fix_mod"), "warn"
+        if rid == "run_quick_scan":
+            if has_last_scan:
+                return tr("home.rec_scan_stale_title"), tr("home.rec_scan_stale_desc"), tr("home.rec_action_scan"), "accent"
+            return tr("home.rec_scan_never_title"), tr("home.rec_scan_never_desc"), tr("home.rec_action_scan"), "accent"
+        return tr("home.rec_mod_title", name=friendly_module_name("recovery", "Recovery")), tr("home.rec_mod_desc"), tr("home.rec_action_open"), "accent"
+
+    def _populate_recommendations(self, recs: list[dict[str, Any]], *, has_last_scan: bool, ignored_count: int) -> None:
+        self.recs_heading_lbl.set_text(tr("home.recs_heading", count=len(recs)))
+        if ignored_count > 0:
+            self.restore_ignored_btn.show()
+        else:
+            self.restore_ignored_btn.hide()
+
+        clear_container(self.recs_box)
+        if not recs:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row.get_style_context().add_class("mintsec-rec-row")
+            row.pack_start(make_icon_chip("security-high-symbolic", pixel_size=16, tone="ok"), False, False, 0)
+            txt = Gtk.Label(
+                label=f"{tr('home.recs_none_title')} — {tr('home.recs_none_desc')}",
+                xalign=0.0,
+            )
+            txt.set_ellipsize(Pango.EllipsizeMode.END)
+            txt.get_style_context().add_class("mintsec-muted")
+            row.pack_start(txt, True, True, 0)
+            self.recs_box.pack_start(row, False, False, 0)
+            self.recs_box.show_all()
+            return
+
+        for rec in recs[:3]:
+            title, desc, btn_lbl, tone = self._describe_recommendation(rec, has_last_scan=has_last_scan)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            row.get_style_context().add_class("mintsec-rec-row")
+
+            ic_name = "dialog-warning-symbolic" if tone in ("crit", "warn") else "security-medium-symbolic"
+            row.pack_start(make_icon_chip(ic_name, pixel_size=16, tone=tone), False, False, 0)
+
+            info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            t_lbl = Gtk.Label(label=title, xalign=0.0)
+            t_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            t_lbl.get_style_context().add_class("mintsec-subtitle")
+            d_lbl = Gtk.Label(label=desc, xalign=0.0)
+            d_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            d_lbl.get_style_context().add_class("mintsec-muted")
+            info.pack_start(t_lbl, False, False, 0)
+            info.pack_start(d_lbl, False, False, 0)
+            row.pack_start(info, True, True, 0)
+
+            act_btn = Gtk.Button(label=btn_lbl)
+            act_btn.get_style_context().add_class("mintsec-primary-cta")
+            act_btn.set_valign(Gtk.Align.CENTER)
+            set_accessible(act_btn, f"{btn_lbl}: {title}", desc)
+            act_btn.connect("clicked", lambda _b, r=rec: self._run_action(r["action"], r.get("target")))
+            row.pack_start(act_btn, False, False, 0)
+
+            if rec.get("ignorable"):
+                ign_btn = Gtk.Button(label=tr("home.rec_ignore_btn"))
+                ign_btn.get_style_context().add_class("mintsec-ghost-btn")
+                ign_btn.set_valign(Gtk.Align.CENTER)
+                set_accessible(ign_btn, tr("home.rec_ignore_a11y", title=title))
+                ign_btn.connect("clicked", lambda _b, rid=rec["rec_id"]: self._on_ignore_rec(rid))
+                row.pack_start(ign_btn, False, False, 0)
+
+            self.recs_box.pack_start(row, False, False, 0)
+        self.recs_box.show_all()
+
+    def _on_ignore_rec(self, rec_id: str) -> None:
+        self.app_window.controller.ignore_recommendation(rec_id)
+        self._last_render_sig = None
+        self.app_window.refresh_all(force=False)
+
+    def _on_restore_ignored(self, *_args: object) -> None:
+        self.app_window.controller.restore_ignored_recommendations()
+        self._last_render_sig = None
+        self.app_window.refresh_all(force=False)
 
     def refresh(self, statuses: dict[str, Any] | None = None) -> None:
         controller = self.app_window.controller
@@ -205,52 +342,92 @@ class HomePage(Gtk.Box):
                 statuses = controller.all_statuses()
 
         open_pending = controller.pending_store.list_open()
-        verdict = controller.get_home_verdict(statuses=statuses, cfg=cfg, open_pending=open_pending)
+        health = controller.get_overall_health(statuses=statuses, cfg=cfg, open_pending=open_pending)
+        recs = controller.get_protection_recommendations(statuses=statuses, cfg=cfg, open_pending=open_pending)
 
-        icon_map = {
-            "ok": "security-high-symbolic",
-            "setup": "security-medium-symbolic",
-            "warning": "security-medium-symbolic",
-            "critical": "security-low-symbolic",
-        }
-        self.shield_icon.set_from_icon_name(icon_map.get(verdict.severity, "security-high-symbolic"), Gtk.IconSize.DIALOG)
-        self._update_shield_and_art(verdict.severity)
+        am_st = statuses.get("antimalware")
+        last_scan_info = (am_st.details.get("last_scan") or {}) if am_st is not None else {}
+        sig_info = (am_st.details.get("signatures") or {}) if am_st is not None else {}
+        last_scan_ts = str(last_scan_info.get("finished_at") or "")
+        db_updated_ts = str(sig_info.get("updated_at") or "")
 
-        headline, subtitle = friendly_verdict_text(verdict, statuses=statuses, open_pending=open_pending)
+        scan_display = format_local_datetime(last_scan_ts) if last_scan_ts else tr("home.last_scan_never")
+        db_display = format_local_datetime(db_updated_ts) if db_updated_ts else tr("home.last_db_never")
+        self.last_scan_val_lbl.set_text(f"{tr('home.last_scan_label')} {scan_display}")
+        self.last_db_val_lbl.set_text(f"{tr('home.last_db_label')} {db_display}")
+
+        self._update_shield_icon_name(health)
+        self._apply_health_style(health)
+
+        if health == "paused":
+            headline = tr("home.status_paused_title")
+            mode = cfg.protection_pause_mode
+            until_fmt = format_local_datetime(cfg.protection_paused_until) if cfg.protection_paused_until else ""
+            if mode == "timed" and until_fmt:
+                subtitle = tr("home.status_paused_sub_until", until=until_fmt)
+            elif mode == "until_restart":
+                subtitle = tr("home.status_paused_sub_restart")
+            else:
+                subtitle = tr("home.status_paused_sub_indef")
+            cta_lbl = tr("home.cta_resume")
+            self._cta_action = "resume_protection"
+            self._cta_target = None
+        elif health == "ok":
+            headline = tr("home.status_ok_title")
+            subtitle = tr("home.status_ok_sub")
+            cta_lbl = tr("home.cta_quick_scan")
+            self._cta_action = "quick_scan"
+            self._cta_target = None
+        else:
+            headline = tr("home.status_alert_title")
+            subtitle = tr("home.status_alert_sub")
+            if recs:
+                cta_lbl = tr("home.cta_fix_first")
+                self._cta_action = recs[0]["action"]
+                self._cta_target = recs[0].get("target")
+            else:
+                cta_lbl = tr("home.cta_quick_scan")
+                self._cta_action = "quick_scan"
+                self._cta_target = None
+
         self.headline_label.set_text(headline)
         self.evidence_label.set_text(subtitle)
-
-        self._cta_action = verdict.primary_cta_action
-        self._cta_target = verdict.primary_cta_target
-        cta_lbl = friendly_cta_label(verdict, statuses=statuses)
-        if cta_lbl:
-            self.primary_cta_btn.set_label(cta_lbl)
-            set_accessible(self.primary_cta_btn, cta_lbl, f"{headline}. {subtitle}")
-            self.primary_cta_btn.show()
-        else:
-            self.primary_cta_btn.hide()
+        self.primary_cta_btn.set_label(cta_lbl)
+        set_accessible(self.primary_cta_btn, cta_lbl, f"{headline}. {subtitle}")
+        self.primary_cta_btn.show()
 
         events = controller.history_store.query(limit=3) if cfg.history_enabled else []
         render_sig = (
             cfg.first_run_completed,
             cfg.history_enabled,
             cfg.language,
-            tuple(
-                (mid, st.state.value, st.needs_setup)
-                for mid, st in statuses.items()
-            ),
+            health,
+            cfg.protection_paused,
+            cfg.protection_pause_mode,
+            cfg.protection_paused_until,
+            tuple(cfg.ignored_recommendations),
+            last_scan_ts,
+            db_updated_ts,
+            tuple((r["rec_id"], r.get("count")) for r in recs),
+            tuple((mid, st.state.value, st.needs_setup) for mid, st in statuses.items()),
             tuple((ev.event_id, ev.action) for ev in events),
         )
         if render_sig == self._last_render_sig:
             return
         self._last_render_sig = render_sig
 
+        self._populate_recommendations(
+            recs,
+            has_last_scan=bool(last_scan_ts),
+            ignored_count=len(cfg.ignored_recommendations),
+        )
+
         # 3 cartões principais
         clear_container(self.cards_box)
         for card in controller.home_cards(statuses=statuses):
             self.cards_box.pack_start(self._make_quick_card_button(card), True, True, 0)
 
-        # Lista minimalista com interruptor direto para o usuário leigo
+        # Lista minimalista com interruptor direto
         clear_container(self.coverage_flow)
         items = list(statuses.items())
         for idx, (mod_id, st) in enumerate(items):
@@ -366,10 +543,11 @@ class HomePage(Gtk.Box):
         return btn
 
     def _render_loading_skeleton(self) -> None:
-        self.shield_icon.set_from_icon_name("security-medium-symbolic", Gtk.IconSize.DIALOG)
-        self._update_shield_and_art("setup")
+        self._apply_health_style("ok")
         self.headline_label.set_text(tr("home.loading_headline"))
         self.evidence_label.set_text(tr("home.loading_subtitle"))
+        self.last_scan_val_lbl.set_text(f"{tr('home.last_scan_label')} {tr('home.last_scan_never')}")
+        self.last_db_val_lbl.set_text(f"{tr('home.last_db_label')} {tr('home.last_db_never')}")
         self.primary_cta_btn.hide()
 
         if not self.cards_box.get_children():
@@ -467,21 +645,36 @@ class HomePage(Gtk.Box):
                 self.in_use_card.pack_start(row, False, False, 0)
         self.in_use_card.show_all()
 
-    def _on_primary_cta(self, *_args: object) -> None:
-        action = self._cta_action
-        target = self._cta_target
-        if action == "review_pending" and target:
-            self.app_window.open_pending_review(target)
+    def _run_action(self, action: str | None, target: Any = None) -> None:
+        if action == "resume_protection":
+            self.app_window.resume_protection()
+        elif action == "review_pending" and target:
+            self.app_window.open_pending_review(str(target))
+        elif action == "open_notifications":
+            self.app_window.navigate_to("notifications")
         elif action == "open_pending":
             self.app_window.navigate_to("activity", tab="pending")
         elif action == "open_first_run":
             self.app_window.open_first_run_wizard()
         elif action == "open_scans":
             self.app_window.navigate_to("scans", tab="scan")
-        elif action == "open_module" and target:
-            self.app_window.open_module_detail(target)
+        elif action == "quick_scan":
+            self.app_window.navigate_to("scans", tab="scan")
+            self.app_window.scans_page.start_scan("quick")
+        elif action == "update_db":
+            self.app_window.trigger_db_update()
+        elif action == "open_recovery":
+            self.app_window.navigate_to("recovery", tab="files")
         elif action == "open_protections":
             self.app_window.navigate_to("protections")
+        elif action and (action.startswith("open_module:") or action.startswith("enable_module:")):
+            mod_id = action.split(":", 1)[1]
+            self.app_window.open_module_detail(mod_id)
+        elif action == "open_module" and target:
+            self.app_window.open_module_detail(str(target))
+
+    def _on_primary_cta(self, *_args: object) -> None:
+        self._run_action(self._cta_action, self._cta_target)
 
     def _on_card_clicked(self, _btn: Gtk.Button, action: str) -> None:
         if action == "quick_scan":

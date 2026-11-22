@@ -291,11 +291,14 @@ def build_css(theme_info: ThemeInfo) -> str:
 
 
 def _build_palette_css(t: dict[str, str]) -> str:
-    """Gera folha CSS Flat Design 100% compatível com GTK 3.24 e zero repinturas ociosas."""
+    """Gera folha CSS Flat Design 100% compatível com GTK 3.24 com transições leves."""
     return f"""
-    .mintsec-window *,
-    .mintsec-dialog * {{
-        transition: none;
+    .mintsec-window button,
+    .mintsec-dialog button,
+    .mintsec-window notebook.mintsec-tabs > header > tabs > tab,
+    .mintsec-window switch,
+    .mintsec-window switch slider {{
+        transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
     }}
     .mintsec-window,
     .mintsec-window:backdrop,
@@ -394,6 +397,66 @@ def _build_palette_css(t: dict[str, str]) -> str:
         border-radius: 14px;
         padding: 18px 20px;
         box-shadow: none;
+    }}
+    .mintsec-hero-ok {{
+        border-color: {t['badge_ok_fg']};
+    }}
+    .mintsec-hero-alert {{
+        border-color: {t['badge_crit_fg']};
+    }}
+    .mintsec-meta-pill {{
+        background-color: {t['surface_subtle']};
+        color: {t['text_secondary']};
+        border: 1px solid {t['divider']};
+        border-radius: 999px;
+        padding: 4px 11px;
+        font-size: 0.84em;
+        font-weight: 600;
+    }}
+    .mintsec-rec-row {{
+        background-color: {t['surface_subtle']};
+        border: 1px solid {t['divider']};
+        border-radius: 10px;
+        padding: 10px 12px;
+    }}
+    .mintsec-sidebar-footer {{
+        padding-top: 6px;
+    }}
+    .mintsec-window button.mintsec-sidebar-bell,
+    .mintsec-window button.mintsec-sidebar-bell:backdrop {{
+        background-image: none;
+        background-color: {t['surface_elevated']};
+        color: {t['text_secondary']};
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 8px 10px;
+        min-width: 44px;
+    }}
+    .mintsec-window button.mintsec-sidebar-bell:hover {{
+        background-color: {t['sidebar_hover']};
+        color: {t['text_primary']};
+    }}
+    .mintsec-window button.mintsec-sidebar-bell.mintsec-active-nav,
+    .mintsec-window button.mintsec-sidebar-bell.mintsec-active-nav:backdrop {{
+        background-color: {t['accent_soft']};
+        color: {t['accent_text']};
+        font-weight: 700;
+    }}
+    .mintsec-window button.mintsec-sidebar-bell.mintsec-bell-alert,
+    .mintsec-window button.mintsec-sidebar-bell.mintsec-bell-alert:backdrop {{
+        background-color: {t['badge_warn_bg']};
+        color: {t['badge_warn_fg']};
+    }}
+    .mintsec-window progressbar.mintsec-progress trough {{
+        background-color: {t['surface_elevated']};
+        border: 1px solid {t['divider']};
+        border-radius: 999px;
+        min-height: 10px;
+    }}
+    .mintsec-window progressbar.mintsec-progress progress {{
+        background-color: {t['accent']};
+        border-radius: 999px;
+        min-height: 10px;
     }}
     .mintsec-list-card {{
         background-color: {t['card_bg']};
