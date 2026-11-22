@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from mintsec.formatting import format_bytes, format_local_datetime  # noqa: E402
 from mintsec.services.antimalware import ScanResult  # noqa: E402
-from mintsec_ui.a11y import set_accessible  # noqa: E402
+from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.animations import format_eta  # noqa: E402
 from mintsec_ui.dialogs.quarantine_restore import (  # noqa: E402
     confirm_quarantine,
@@ -38,7 +39,15 @@ class ScansPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.app_window = app_window
         self._cancel_event: threading.Event | None = None
+        self._pause_event: threading.Event | None = None
+        self._paused = False
         self._scanning = False
+        self._loading_post_action = False
+        self._post_action_override = False
+        self.post_action_countdown_secs = 10
+        self._post_action_timer_id: int | None = None
+        self._post_action_pending: str | None = None
+        self._post_action_remaining: int = 0
         self._last_result: ScanResult | None = None
         self._last_stats: dict[str, Any] | None = None
         self._last_sched_sig: tuple[Any, ...] | None = None
@@ -105,6 +114,11 @@ class ScansPage(Gtk.Box):
         self.btn_choose = Gtk.Button(label="")
         self.btn_choose.connect("clicked", self._on_choose_path)
 
+        self.btn_pause = Gtk.Button(label="")
+        self.btn_pause.set_sensitive(False)
+        self.btn_pause.set_no_show_all(True)
+        self.btn_pause.connect("clicked", lambda *_: self.toggle_pause_scan())
+
         self.btn_cancel = Gtk.Button(label="")
         self.btn_cancel.get_style_context().add_class("destructive-action")
         self.btn_cancel.set_sensitive(False)
@@ -114,8 +128,19 @@ class ScansPage(Gtk.Box):
         btn_row.pack_start(self.btn_quick, False, False, 0)
         btn_row.pack_start(self.btn_system, False, False, 0)
         btn_row.pack_start(self.btn_choose, False, False, 0)
+        btn_row.pack_start(self.btn_pause, False, False, 0)
         btn_row.pack_start(self.btn_cancel, False, False, 0)
         left.pack_start(btn_row, False, False, 0)
+
+        post_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._post_action_lbl = Gtk.Label(label="", xalign=0.0)
+        self._post_action_lbl.get_style_context().add_class("mintsec-muted")
+        self.post_action_combo = Gtk.ComboBoxText()
+        self.post_action_combo.set_size_request(190, -1)
+        self.post_action_combo.connect("changed", self._on_post_action_changed)
+        post_row.pack_start(self._post_action_lbl, False, False, 0)
+        post_row.pack_start(self.post_action_combo, False, False, 0)
+        left.pack_start(post_row, False, False, 0)
 
         hero_card.pack_start(left, True, True, 0)
         self._spot_art = make_illustration(
@@ -158,6 +183,11 @@ class ScansPage(Gtk.Box):
         self.progress_path_lbl.get_style_context().add_class("mintsec-muted")
         prog_card.pack_start(self.progress_path_lbl, False, False, 0)
 
+        self.post_action_hint_lbl = Gtk.Label(label="", xalign=0.0)
+        self.post_action_hint_lbl.set_no_show_all(True)
+        self.post_action_hint_lbl.get_style_context().add_class("mintsec-muted")
+        prog_card.pack_start(self.post_action_hint_lbl, False, False, 0)
+
         self.progress_revealer.add(prog_card)
         self.scan_tab.pack_start(self.progress_revealer, False, False, 0)
 
@@ -192,6 +222,33 @@ class ScansPage(Gtk.Box):
         self.scan_status_lbl.get_style_context().add_class("mintsec-muted")
         status_callout.pack_start(self.scan_status_lbl, True, True, 0)
         self.scan_tab.pack_start(status_callout, False, False, 0)
+
+        self.post_action_revealer = Gtk.Revealer()
+        self.post_action_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.post_action_revealer.set_transition_duration(180)
+        self.post_action_revealer.set_reveal_child(False)
+
+        post_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        post_banner.get_style_context().add_class("mintsec-callout")
+        post_banner.get_style_context().add_class("mintsec-callout-warn")
+        self.post_action_countdown_lbl = Gtk.Label(label="", xalign=0.0)
+        self.post_action_countdown_lbl.set_line_wrap(True)
+        self.btn_post_now = Gtk.Button(label="")
+        self.btn_post_now.get_style_context().add_class("destructive-action")
+        self.btn_post_now.connect(
+            "clicked",
+            lambda *_: self._execute_pending_post_action(self._post_action_pending or "none"),
+        )
+        self.btn_post_cancel = Gtk.Button(label="")
+        self.btn_post_cancel.connect(
+            "clicked",
+            lambda *_: self.cancel_post_action_countdown(notify_status=True),
+        )
+        post_banner.pack_start(self.post_action_countdown_lbl, True, True, 0)
+        post_banner.pack_start(self.btn_post_now, False, False, 0)
+        post_banner.pack_start(self.btn_post_cancel, False, False, 0)
+        self.post_action_revealer.add(post_banner)
+        self.scan_tab.pack_start(self.post_action_revealer, False, False, 0)
 
         self.result_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.scan_tab.pack_start(self.result_box, False, False, 0)
@@ -244,9 +301,33 @@ class ScansPage(Gtk.Box):
         set_accessible(self.btn_system, sys_lbl, tr("scans.btn_system_desc"))
         self.btn_choose.set_label(tr("scans.btn_choose"))
         set_accessible(self.btn_choose, tr("scans.btn_choose_a11y"), tr("scans.btn_choose_desc"))
+        self._update_pause_button_ui()
         self.btn_cancel.set_label(tr("common.cancel"))
         set_accessible(self.btn_cancel, tr("scans.btn_cancel_a11y"), tr("scans.btn_cancel_desc"))
         set_accessible(self._spot_art, tr("scans.spot_a11y"), tr("scans.spot_a11y"))
+
+        self._loading_post_action = True
+        try:
+            default_action = self.app_window.controller.config_store.load().default_scan_post_action
+            cur_action = self.post_action_combo.get_active_id() or default_action
+            self.post_action_combo.remove_all()
+            self.post_action_combo.append("none", tr("scans.post_none"))
+            self.post_action_combo.append("suspend", tr("scans.post_suspend"))
+            self.post_action_combo.append("shutdown", tr("scans.post_shutdown"))
+            self.post_action_combo.set_active_id(cur_action if cur_action in {"none", "suspend", "shutdown"} else "none")
+            self._post_action_lbl.set_text(tr("scans.post_action_label"))
+            relate_label(self._post_action_lbl, self.post_action_combo)
+            set_accessible(self.post_action_combo, tr("scans.post_action_a11y"), tr("scans.post_action_desc"))
+        finally:
+            self._loading_post_action = False
+
+        self.btn_post_now.set_label(tr("scans.post_now_btn"))
+        set_accessible(self.btn_post_now, tr("scans.post_now_a11y"), tr("scans.post_now_desc"))
+        self.btn_post_cancel.set_label(tr("scans.post_cancel_btn"))
+        set_accessible(self.btn_post_cancel, tr("scans.post_cancel_a11y"), tr("scans.post_cancel_desc"))
+        self._update_post_action_hint()
+        if self._post_action_pending is not None:
+            self._update_countdown_label()
 
         self._more_exp.set_label(tr("scans.more_expander"))
         set_accessible(self._more_exp, tr("scans.more_expander"), tr("scans.more_expander_desc"))
@@ -291,8 +372,66 @@ class ScansPage(Gtk.Box):
         self._last_quar_sig = None
 
     def refresh(self, statuses: dict[str, Any] | None = None) -> None:
+        if not self._scanning and self._post_action_pending is None and not self._post_action_override:
+            default_action = self.app_window.controller.config_store.load().default_scan_post_action
+            self._set_post_action_combo(default_action)
         self._refresh_schedules()
         self._refresh_quarantine()
+
+    def get_selected_post_action(self) -> str:
+        val = self.post_action_combo.get_active_id() or "none"
+        return val if val in {"none", "suspend", "shutdown"} else "none"
+
+    def _set_post_action_combo(self, action: str) -> None:
+        clean = action if action in {"none", "suspend", "shutdown"} else "none"
+        if self.post_action_combo.get_active_id() == clean:
+            return
+        self._loading_post_action = True
+        try:
+            self.post_action_combo.set_active_id(clean)
+        finally:
+            self._loading_post_action = False
+        self._update_post_action_hint()
+
+    def sync_default_post_action(self, default_action: str) -> None:
+        """Sincroniza dropdown quando padrão muda em Configurações."""
+        if self._scanning and self._post_action_override:
+            return
+        self._post_action_override = False
+        self._set_post_action_combo(default_action)
+
+    def _update_post_action_hint(self) -> None:
+        action = self.get_selected_post_action()
+        if self._scanning and action == "suspend":
+            self.post_action_hint_lbl.set_text(tr("scans.post_hint_suspend"))
+            self.post_action_hint_lbl.show()
+        elif self._scanning and action == "shutdown":
+            self.post_action_hint_lbl.set_text(tr("scans.post_hint_shutdown"))
+            self.post_action_hint_lbl.show()
+        else:
+            self.post_action_hint_lbl.set_text("")
+            self.post_action_hint_lbl.hide()
+
+    def _on_post_action_changed(self, *_args: object) -> None:
+        if self._loading_post_action:
+            return
+        self._post_action_override = True
+        action = self.get_selected_post_action()
+        self._update_post_action_hint()
+        if self._post_action_pending is not None:
+            if action == "none":
+                self.cancel_post_action_countdown(notify_status=True)
+            else:
+                self._post_action_pending = action
+                self._update_countdown_label()
+
+    def _update_pause_button_ui(self) -> None:
+        if self._paused:
+            self.btn_pause.set_label(tr("scans.btn_resume"))
+            set_accessible(self.btn_pause, tr("scans.btn_resume_a11y"), tr("scans.btn_resume_desc"))
+        else:
+            self.btn_pause.set_label(tr("scans.btn_pause"))
+            set_accessible(self.btn_pause, tr("scans.btn_pause_a11y"), tr("scans.btn_pause_desc"))
 
     def _refresh_schedules(self) -> None:
         lang = self.app_window.controller.config_store.load().language
@@ -451,11 +590,18 @@ class ScansPage(Gtk.Box):
             self._render_scan_error(tr("scans.not_installed_err"))
             return
 
+        self.cancel_post_action_countdown()
         self._scanning = True
+        self._paused = False
         self._last_stats = None
         self._cancel_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._update_pause_button_ui()
+        self.btn_pause.set_sensitive(True)
+        self.btn_pause.show()
         self.btn_cancel.set_sensitive(True)
         self.btn_cancel.show()
+        self._update_post_action_hint()
         self.progress_bar.set_fraction(0.0)
         self.progress_phase_lbl.set_text(tr("scans.phase_counting"))
         self.progress_pct_lbl.set_text("0%")
@@ -466,6 +612,18 @@ class ScansPage(Gtk.Box):
         self.progress_revealer.set_reveal_child(True)
         self.scan_status_lbl.set_text(tr("scans.running_status", count=0))
         self.app_window.set_active_scan_banner(True, tr("scans.running_banner", count=0))
+
+        try:
+            sig = inspect.signature(service.run_scan)
+            accepts_pause = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD or p.name == "pause_event"
+                for p in sig.parameters.values()
+            )
+        except (TypeError, ValueError):
+            accepts_pause = False
+
+        pause_ev = self._pause_event
+        cancel_ev = self._cancel_event
 
         def _worker() -> None:
             last_emit = [0.0]
@@ -484,26 +642,59 @@ class ScansPage(Gtk.Box):
                     saw_stats[0] = True
                     now = time.monotonic()
                     phase = str(stats.get("phase", ""))
-                    if phase != last_phase[0] or (now - last_emit[0]) >= 0.12 or phase == "done":
+                    if (
+                        phase != last_phase[0]
+                        or phase == "paused"
+                        or (now - last_emit[0]) >= 0.12
+                        or phase == "done"
+                    ):
                         last_phase[0] = phase
                         last_emit[0] = now
                         GLib.idle_add(self._on_scan_stats, dict(stats))
 
-                res = service.run_scan(
-                    scope=scope,
-                    paths=custom_paths,
-                    on_progress=_prog,
-                    on_stats=_stats,
-                    cancel_event=self._cancel_event,
-                )
+                scan_kwargs: dict[str, Any] = {
+                    "scope": scope,
+                    "paths": custom_paths,
+                    "on_progress": _prog,
+                    "on_stats": _stats,
+                    "cancel_event": cancel_ev,
+                }
+                if accepts_pause:
+                    scan_kwargs["pause_event"] = pause_ev
+                res = service.run_scan(**scan_kwargs)
                 GLib.idle_add(self._on_scan_finished, res, None)
             except Exception as exc:
                 GLib.idle_add(self._on_scan_finished, None, str(exc))
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def toggle_pause_scan(self) -> None:
+        if not self._scanning or self._pause_event is None:
+            return
+        self._paused = not self._paused
+        if self._paused:
+            self._pause_event.set()
+            self.progress_phase_lbl.set_text(tr("scans.phase_paused"))
+            self.progress_eta_lbl.set_text(tr("scans.eta_paused"))
+            pct = float((self._last_stats or {}).get("percent", 0.0))
+            paused_msg = tr("scans.paused_banner", pct=pct)
+            self.scan_status_lbl.set_text(paused_msg)
+            self.app_window.set_active_scan_banner(True, paused_msg)
+        else:
+            self._pause_event.clear()
+            if self._last_stats is not None:
+                self._apply_stats_ui({**self._last_stats, "phase": "scanning"})
+            else:
+                self.progress_phase_lbl.set_text(tr("scans.phase_scanning"))
+        self._update_pause_button_ui()
+
     def cancel_scan(self) -> None:
         if self._cancel_event is not None:
+            self._paused = False
+            if self._pause_event is not None:
+                self._pause_event.clear()
+            self.btn_pause.set_sensitive(False)
+            self._update_pause_button_ui()
             self._cancel_event.set()
             if self._scanning:
                 self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
@@ -511,8 +702,11 @@ class ScansPage(Gtk.Box):
     def _apply_stats_ui(self, stats: dict[str, Any]) -> None:
         phase = str(stats.get("phase", "scanning"))
         cancelling = self._cancel_event is not None and self._cancel_event.is_set()
+        paused = (phase == "paused" or self._paused) and not cancelling
         if cancelling or phase == "cancelled":
             self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
+        elif paused:
+            self.progress_phase_lbl.set_text(tr("scans.phase_paused"))
         elif phase == "counting":
             self.progress_phase_lbl.set_text(tr("scans.phase_counting"))
         else:
@@ -525,7 +719,7 @@ class ScansPage(Gtk.Box):
         eta_txt = format_eta(stats.get("eta_seconds"))
         cur_path = str(stats.get("current_path") or "")
 
-        if phase == "counting":
+        if phase == "counting" and not paused:
             self.progress_bar.pulse()
         else:
             self.progress_bar.set_fraction(max(0.0, min(1.0, pct / 100.0)))
@@ -535,11 +729,16 @@ class ScansPage(Gtk.Box):
         else:
             pct_line = tr("scans.progress_approx", pct=pct, scanned=scanned)
         self.progress_pct_lbl.set_text(pct_line)
-        self.progress_eta_lbl.set_text(tr("scans.eta_label", eta=eta_txt))
+        self.progress_eta_lbl.set_text(
+            tr("scans.eta_paused") if paused else tr("scans.eta_label", eta=eta_txt)
+        )
         self.progress_path_lbl.set_text(cur_path)
 
-        banner_path = Path(cur_path).name if cur_path else "…"
-        banner_txt = tr("scans.running_banner_eta", pct=pct, eta=eta_txt, path=banner_path)
+        if paused:
+            banner_txt = tr("scans.paused_banner", pct=pct)
+        else:
+            banner_path = Path(cur_path).name if cur_path else "…"
+            banner_txt = tr("scans.running_banner_eta", pct=pct, eta=eta_txt, path=banner_path)
         self.scan_status_lbl.set_text(banner_txt)
         self.app_window.set_active_scan_banner(True, banner_txt)
 
@@ -553,21 +752,92 @@ class ScansPage(Gtk.Box):
     def _on_scan_progress(self, count: int) -> bool:
         if self.app_window._destroyed or not self._scanning:
             return False
-        self.progress_phase_lbl.set_text(tr("scans.phase_scanning"))
+        self.progress_phase_lbl.set_text(tr("scans.phase_paused") if self._paused else tr("scans.phase_scanning"))
         self.progress_pct_lbl.set_text(tr("scans.progress_approx", pct=0.0, scanned=count))
-        msg = tr("scans.running_banner", count=count)
+        msg = tr("scans.paused_banner", pct=0.0) if self._paused else tr("scans.running_banner", count=count)
         self.scan_status_lbl.set_text(msg)
         self.app_window.set_active_scan_banner(True, msg)
         return False
 
+    def _update_countdown_label(self) -> None:
+        if self._post_action_pending == "suspend":
+            self.post_action_countdown_lbl.set_text(
+                tr("scans.post_countdown_suspend", secs=self._post_action_remaining)
+            )
+        elif self._post_action_pending == "shutdown":
+            self.post_action_countdown_lbl.set_text(
+                tr("scans.post_countdown_shutdown", secs=self._post_action_remaining)
+            )
+
+    def cancel_post_action_countdown(self, *, notify_status: bool = False) -> None:
+        if self._post_action_timer_id is not None:
+            GLib.source_remove(self._post_action_timer_id)
+            self._post_action_timer_id = None
+        was_pending = self._post_action_pending is not None
+        self._post_action_pending = None
+        self._post_action_remaining = 0
+        self.post_action_revealer.set_reveal_child(False)
+        if notify_status and was_pending:
+            self.scan_status_lbl.set_text(tr("scans.post_cancelled_note"))
+
+    def _start_post_action_countdown(self, action: str) -> None:
+        if action not in {"suspend", "shutdown"}:
+            return
+        secs = int(self.post_action_countdown_secs)
+        if secs <= 0:
+            self._execute_pending_post_action(action)
+            return
+        self.cancel_post_action_countdown()
+        self._post_action_pending = action
+        self._post_action_remaining = secs
+        self._update_countdown_label()
+        self.post_action_revealer.set_reveal_child(True)
+        self._post_action_timer_id = GLib.timeout_add_seconds(1, self._on_post_action_tick)
+
+    def _on_post_action_tick(self) -> bool:
+        if self.app_window._destroyed or self._post_action_pending is None:
+            self._post_action_timer_id = None
+            return False
+        self._post_action_remaining -= 1
+        if self._post_action_remaining <= 0:
+            action = self._post_action_pending
+            self._post_action_timer_id = None
+            self._execute_pending_post_action(action)
+            return False
+        self._update_countdown_label()
+        return True
+
+    def _execute_pending_post_action(self, action: str) -> None:
+        self.cancel_post_action_countdown()
+        default_action = self.app_window.controller.config_store.load().default_scan_post_action
+        self._post_action_override = False
+        self._set_post_action_combo(default_action)
+        if action not in {"suspend", "shutdown"}:
+            return
+        try:
+            res = self.app_window.controller.execute_post_scan_action(action)
+            if not res.get("ok"):
+                err = str(res.get("error") or tr("scans.unknown_err"))
+                self._render_scan_error(tr("scans.post_failed_err", err=err))
+        except Exception as exc:  # noqa: BLE001
+            self._render_scan_error(tr("scans.post_failed_err", err=str(exc)))
+
     def _on_scan_finished(self, result: ScanResult | None, err: str | None) -> bool:
         if self.app_window._destroyed:
             return False
+        selected_post_action = self.get_selected_post_action()
         self._scanning = False
+        self._paused = False
+        self._pause_event = None
         self._last_stats = None
+        self._post_action_override = False
+        self.btn_pause.set_sensitive(False)
+        self.btn_pause.hide()
+        self._update_pause_button_ui()
         self.btn_cancel.set_sensitive(False)
         self.btn_cancel.hide()
         self.progress_revealer.set_reveal_child(False)
+        self._update_post_action_hint()
         self.app_window.set_active_scan_banner(False, "")
         if err is not None or result is None:
             self.scan_status_lbl.set_text(tr("scans.failed_status", err=err))
@@ -585,6 +855,12 @@ class ScansPage(Gtk.Box):
         self.scan_status_lbl.set_text(summary)
         self._render_scan_result(result)
         self.app_window.refresh_all(force=True)
+        if (
+            not result.cancelled
+            and result.error_message is None
+            and selected_post_action in {"suspend", "shutdown"}
+        ):
+            self._start_post_action_countdown(selected_post_action)
         return False
 
     def _render_scan_error(self, msg: str) -> None:

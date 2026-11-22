@@ -1,5 +1,5 @@
 {
-  "suite_version": "0.2.0",
+  "suite_version": "0.2.1",
   "target_base": "Linux Mint 22.3 (Ubuntu 24.04)",
   "kernel": "7.0.0-43-generic",
   "approved_features": [

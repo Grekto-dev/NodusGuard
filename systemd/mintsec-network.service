@@ -20,3 +20,4 @@ RestrictRealtime=yes
 ProtectControlGroups=yes
 StateDirectory=mint-security-suite
 StateDirectoryMode=0700
+Environment=XDG_CONFIG_HOME=/var/lib/mint-security-suite XDG_DATA_HOME=/var/lib/mint-security-suite XDG_STATE_HOME=/var/lib/mint-security-suite

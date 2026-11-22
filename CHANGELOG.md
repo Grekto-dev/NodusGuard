@@ -5,6 +5,21 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-22
+
+### Added
+- **Pause & Resume Security Scans**:
+  - Added a **Pause scan / Resume scan** control during active ClamAV scans, using process-group `SIGSTOP`/`SIGCONT` signaling and excluding paused intervals from ETA calculations.
+- **Immediate & Default Post-Scan Power Action**:
+  - Added a **When scan finishes** selector (`Do nothing`, `Suspend PC`, `Shut down PC`) on the Scans page that applies immediately even to scans already in progress, with a cancellable countdown via `org.freedesktop.login1` (and `systemctl` fallback).
+  - Added **Default action after scan** (`default_scan_post_action`, defaulting to `none`) in **Settings → Alerts & Protection**.
+
+### Fixed
+- **Polkit & Root Elevation Routing**:
+  - Routed privileged Firewall (`enable`, `disable`, `revoke_rule`), Safe Browsing (`enable`, `disable`), and ClamAV (`FreshClam` database updates) mutations through the root D-Bus services (`mint-security-daemon`) instead of invoking root-only binaries from the unprivileged UI process.
+  - Isolated root daemon persistence under `STATE_DIRECTORY` (`/var/lib/mint-security-suite`), mapped `AuthorizationError` cleanly to `org.freedesktop.DBus.Error.AccessDenied`, and granted required systemd capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_DAC_OVERRIDE`, `CAP_SETUID`, `CAP_SETGID`) without relaxing `ProtectSystem=strict` or Polkit boundaries.
+  - Stopped active on-demand `mintsec-*.service` units during core `.deb` upgrades so updated daemon code and systemd units take effect immediately.
+
 ## [0.2.0] - 2026-11-22
 
 ### Added

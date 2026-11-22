@@ -19,6 +19,7 @@ VALID_FIREWALL_OUTBOUND = {"monitor_only", "block_per_app"}
 VALID_LANGUAGES = {"en", "pt_BR"}
 VALID_PAUSE_MODES = {"none", "timed", "until_restart", "indefinite"}
 VALID_AUTO_SCAN_INTERVALS = {"6h", "12h", "daily", "weekly"}
+VALID_SCAN_POST_ACTIONS = {"none", "suspend", "shutdown"}
 _REC_ID_RE = re.compile(r"^[a-z0-9_:-]{1,64}$")
 
 
@@ -54,6 +55,7 @@ class SuiteConfig:
     protection_pause_mode: str = "none"
     protection_paused_until: str | None = None
     ignored_recommendations: list[str] = field(default_factory=list)
+    default_scan_post_action: str = "none"
 
     def validate(self) -> None:
         """Garante que os valores configurados pertencem aos conjuntos aprovados."""
@@ -73,6 +75,8 @@ class SuiteConfig:
             raise ValueError(f"auto_quick_scan_interval inválido: {self.auto_quick_scan_interval}")
         if self.protection_pause_mode not in VALID_PAUSE_MODES:
             raise ValueError(f"protection_pause_mode inválido: {self.protection_pause_mode}")
+        if self.default_scan_post_action not in VALID_SCAN_POST_ACTIONS:
+            raise ValueError(f"default_scan_post_action inválido: {self.default_scan_post_action}")
 
     def is_protection_paused_now(self, now: datetime | None = None) -> bool:
         """Informa se a proteção está atualmente pausada levando em conta expiração temporizada."""
@@ -149,6 +153,7 @@ class SuiteConfig:
             protection_pause_mode=str(data.get("protection_pause_mode", "none")),
             protection_paused_until=clean_until,
             ignored_recommendations=clean_ignored,
+            default_scan_post_action=str(data.get("default_scan_post_action", "none")),
         )
         cfg.validate()
         return cfg

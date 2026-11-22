@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Any, NoReturn
 
 from mintsec.auth import AuthorizationError, CallerAuthorizer
+from mintsec.config import ConfigStore
+from mintsec.contracts import ensure_private_dir
+from mintsec.history import HistoryStore
+from mintsec.incident import IncidentManager
+from mintsec.pending import PendingStore
 from mintsec.services.catalog import SuiteController
 
 
@@ -22,6 +29,33 @@ ENABLE_OPTION_ALLOWLIST: dict[str, frozenset[str]] = {
     "isolation": frozenset(),
     "rescue": frozenset(),
 }
+
+
+def _build_daemon_controller(*, use_system_state: bool = False) -> SuiteController:
+    """Constrói SuiteController isolando estado sob STATE_DIRECTORY quando executa como root."""
+    if not use_system_state and os.geteuid() != 0 and not os.environ.get("STATE_DIRECTORY", "").strip():
+        return SuiteController(authorizer=CallerAuthorizer())
+
+    raw_state = os.environ.get("STATE_DIRECTORY", "").strip() or "/var/lib/mint-security-suite"
+    state_dir = ensure_private_dir(Path(raw_state), 0o700)
+    cfg_store = ConfigStore(state_dir / "settings.json")
+    cfg = cfg_store.load()
+    return SuiteController(
+        config_store=cfg_store,
+        pending_store=PendingStore(state_dir / "pending.json"),
+        history_store=HistoryStore(state_dir / "history.db", enabled=cfg.history_enabled),
+        incident_manager=IncidentManager(state_dir / "incidents"),
+        authorizer=CallerAuthorizer(),
+        data_dir=state_dir,
+    )
+
+
+def _raise_dbus_error(exc: Exception) -> NoReturn:
+    import dbus
+
+    if isinstance(exc, AuthorizationError):
+        raise dbus.DBusException(str(exc), name="org.freedesktop.DBus.Error.AccessDenied")
+    raise dbus.DBusException(str(exc))
 
 
 def _authorize_dbus_call(
@@ -90,7 +124,7 @@ class ModuleDBusService:
                     _authorize_dbus_call(authorizer, bus_obj, "org.mintsecurity.suite.query", sender)
                     return json.dumps(service.query_status().to_dict(), ensure_ascii=False)
                 except Exception as exc:
-                    raise dbus.DBusException(str(exc))
+                    _raise_dbus_error(exc)
 
             @dbus.service.method(
                 manifest.dbus_bus_name,
@@ -101,7 +135,12 @@ class ModuleDBusService:
             def Enable(inner_self, options_json: str, sender: str | None = None) -> str:
                 inner_self._touch()
                 try:
-                    uid = _authorize_dbus_call(authorizer, bus_obj, "org.mintsecurity.module.toggle", sender)
+                    action_id = (
+                        "org.mintsecurity.firewall.configure"
+                        if module_id == "firewall"
+                        else "org.mintsecurity.module.toggle"
+                    )
+                    uid = _authorize_dbus_call(authorizer, bus_obj, action_id, sender)
                     raw_opts = json.loads(options_json or "{}")
                     if not isinstance(raw_opts, dict):
                         raise ValueError("Parâmetro options_json deve ser um objeto JSON.")
@@ -111,9 +150,10 @@ class ModuleDBusService:
                     filtered: dict[str, Any] = {k: v for k, v in raw_opts.items() if k in allowed_keys}
                     if module_id == "firewall":
                         filtered["caller_uid"] = uid
+                        filtered["_preauthorized"] = True
                     return json.dumps(service.enable(**filtered).to_dict(), ensure_ascii=False)
                 except Exception as exc:
-                    raise dbus.DBusException(str(exc))
+                    _raise_dbus_error(exc)
 
             @dbus.service.method(
                 manifest.dbus_bus_name,
@@ -125,19 +165,76 @@ class ModuleDBusService:
                 inner_self._touch()
                 try:
                     revert = bool(revert_suite_changes)
-                    action_id = (
-                        "org.mintsecurity.firewall.reset"
-                        if (module_id == "firewall" and revert)
-                        else "org.mintsecurity.module.toggle"
-                    )
+                    if module_id == "firewall":
+                        action_id = (
+                            "org.mintsecurity.firewall.reset"
+                            if revert
+                            else "org.mintsecurity.firewall.configure"
+                        )
+                    else:
+                        action_id = "org.mintsecurity.module.toggle"
                     uid = _authorize_dbus_call(authorizer, bus_obj, action_id, sender)
                     if module_id == "firewall":
-                        status = service.disable(revert_suite_changes=revert, caller_uid=uid)
+                        status = service.disable(
+                            revert_suite_changes=revert,
+                            caller_uid=uid,
+                            preauthorized=True,
+                        )
                     else:
                         status = service.disable(revert_suite_changes=revert)
                     return json.dumps(status.to_dict(), ensure_ascii=False)
                 except Exception as exc:
-                    raise dbus.DBusException(str(exc))
+                    _raise_dbus_error(exc)
+
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="s",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def RevokeRule(inner_self, rule_id: str, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "firewall":
+                        raise ValueError("RevokeRule só é suportado pelo módulo firewall.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.firewall.configure",
+                        sender,
+                    )
+                    clean_id = str(rule_id).strip()
+                    if not clean_id:
+                        raise ValueError("Identificador de regra inválido.")
+                    ok = service.revoke_rule(clean_id, caller_uid=uid, preauthorized=True)
+                    return json.dumps(
+                        {"ok": bool(ok), "status": service.query_status().to_dict()},
+                        ensure_ascii=False,
+                    )
+                except Exception as exc:
+                    _raise_dbus_error(exc)
+
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def UpdateSignatures(inner_self, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "antimalware":
+                        raise ValueError("UpdateSignatures só é suportado pelo módulo antimalware.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.antimalware.update-db",
+                        sender,
+                    )
+                    res = service.update_signatures(caller_uid=uid, preauthorized=True)
+                    return json.dumps(res, ensure_ascii=False)
+                except Exception as exc:
+                    _raise_dbus_error(exc)
 
         self._exported = _Exported()
         self._reset_idle_timer()
@@ -171,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--history-only", action="store_true", help="Inicializar/validar histórico WAL sem privilégios")
     args = parser.parse_args(argv)
 
-    controller = SuiteController(authorizer=CallerAuthorizer())
+    controller = _build_daemon_controller(use_system_state=bool(args.module))
     if args.history_only:
         mode = controller.history_store.journal_mode()
         print(f"SQLite history journal_mode={mode}")

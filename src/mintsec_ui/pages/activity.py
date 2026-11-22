@@ -9,8 +9,10 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from mintsec.formatting import format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
+from mintsec_ui.actions import run_ui_task  # noqa: E402
+from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import tr  # noqa: E402
 from mintsec_ui.pages.recovery import populate_incident_cards  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
@@ -329,14 +331,26 @@ class ActivityPage(Gtk.Box):
                     rev_btn = Gtk.Button(label=tr("act.revoke_btn"))
                     rev_btn.set_valign(Gtk.Align.CENTER)
                     set_accessible(rev_btn, tr("act.revoke_btn"), tr("act.revoke_desc"))
-                    rev_btn.connect("clicked", lambda _b, rid=rule_id: self._on_revoke_rule(rid))
+                    rev_btn.connect("clicked", lambda b, rid=rule_id: self._on_revoke_rule(rid, b))
                     card.pack_start(rev_btn, False, False, 0)
 
                 self.history_list_box.pack_start(card, False, False, 0)
 
         self.history_list_box.show_all()
 
-    def _on_revoke_rule(self, rule_id: str) -> None:
-        self.app_window.controller.firewall.revoke_rule(rule_id)
-        self.app_window.controller.invalidate_cache("firewall")
-        self.app_window.refresh_all(force=True)
+    def _on_revoke_rule(self, rule_id: str, btn: Any = None) -> None:
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.revoke_firewall_rule(rule_id),
+            on_success=lambda _ok: self.app_window.refresh_all(force=True),
+            on_error=lambda exc: ask_action_confirmation(
+                self.app_window,
+                title=tr("detail.err_title"),
+                summary=format_error_message(exc),
+                actor=tr("detail.err_actor"),
+                evidence=tr("detail.err_evidence"),
+                confirm_label=tr("common.close"),
+                confirm_effect=tr("common.close_notice"),
+            ),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )

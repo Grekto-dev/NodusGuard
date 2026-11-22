@@ -207,6 +207,31 @@ class ModuleStatus:
         payload["state_label"] = self.state.ui_label
         return payload
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ModuleStatus:
+        """Reconstrói ModuleStatus a partir de resposta JSON (ex.: barramento D-Bus)."""
+        raw_state = str(data.get("state", ModuleState.INDISPONIVEL.value))
+        try:
+            state = ModuleState(raw_state)
+        except ValueError:
+            state = ModuleState.INDISPONIVEL
+        raw_details = data.get("details")
+        return cls(
+            module_id=str(data.get("module_id", "")),
+            display_name=str(data.get("display_name", "")),
+            state=state,
+            installed_version=data.get("installed_version"),
+            package_origin=str(data.get("package_origin", "")),
+            mode_summary=str(data.get("mode_summary", "")),
+            last_confirmed_at=data.get("last_confirmed_at"),
+            evidence=str(data.get("evidence", "")),
+            degraded_reason=data.get("degraded_reason"),
+            needs_setup=bool(data.get("needs_setup", False)),
+            phase=str(data.get("phase", "mvp")),
+            experimental=bool(data.get("experimental", False)),
+            details=dict(raw_details) if isinstance(raw_details, dict) else {},
+        )
+
 
 @dataclass
 class EventRecord:

@@ -10,8 +10,9 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from mintsec.contracts import ModuleState  # noqa: E402
-from mintsec.formatting import format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
+from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
@@ -179,7 +180,7 @@ class ModuleDetailPage(Gtk.Box):
                 tr("detail.disable_a11y", name=display_title),
                 tr("detail.disable_desc"),
             )
-            disable_btn.connect("clicked", lambda *_: self._on_disable_module(mod_id))
+            disable_btn.connect("clicked", lambda b: self._on_disable_module(mod_id, b))
             ctrl_card.pack_start(c_txt, True, True, 0)
             ctrl_card.pack_start(disable_btn, False, False, 0)
             self.body_box.pack_start(ctrl_card, False, False, 0)
@@ -205,7 +206,7 @@ class ModuleDetailPage(Gtk.Box):
         upd_btn.get_style_context().add_class("mintsec-primary-cta")
         set_accessible(upd_btn, upd_lbl, tr("detail.am_update_desc"))
         upd_btn.set_sensitive(st.state != ModuleState.AUSENTE)
-        upd_btn.connect("clicked", self._on_update_clamav)
+        upd_btn.connect("clicked", lambda b: self._on_update_clamav(b))
 
         scans_lbl = tr("detail.am_open_scans")
         scans_btn = Gtk.Button(label=scans_lbl)
@@ -262,7 +263,7 @@ class ModuleDetailPage(Gtk.Box):
         act_btn = Gtk.Button(label=act_lbl)
         act_btn.get_style_context().add_class("mintsec-primary-cta")
         set_accessible(act_btn, act_lbl, tr("detail.fw_enable_desc"))
-        act_btn.connect("clicked", self._on_enable_firewall)
+        act_btn.connect("clicked", lambda b: self._on_enable_firewall(b))
         act_row.pack_start(act_btn, False, False, 0)
         in_card.pack_start(act_row, False, False, 0)
         in_box.pack_start(in_card, False, False, 0)
@@ -395,7 +396,7 @@ class ModuleDetailPage(Gtk.Box):
                         f"{tr('act.revoke_btn')} {r['target']}",
                         tr("act.revoke_desc"),
                     )
-                    rev.connect("clicked", lambda _b, rid=r["rule_id"]: self._on_revoke_fw_rule(rid))
+                    rev.connect("clicked", lambda b, rid=r["rule_id"]: self._on_revoke_fw_rule(rid, b))
                     row.pack_start(rev, False, False, 0)
                 rules_card.pack_start(row, False, False, 0)
         rules_box.pack_start(rules_card, False, False, 0)
@@ -685,13 +686,21 @@ class ModuleDetailPage(Gtk.Box):
         card.pack_start(row, False, False, 0)
         self.body_box.pack_start(card, False, False, 0)
 
-    def _on_update_clamav(self, *_args: object) -> None:
-        try:
-            self.app_window.controller.antimalware.update_signatures()
-            self.app_window.controller.invalidate_cache("antimalware")
+    def _on_update_clamav(self, btn: Any = None, *_args: object) -> None:
+        def _done(_res: dict[str, Any]) -> None:
+            if not _res.get("ok"):
+                err_txt = str(_res.get("stderr") or _res.get("stdout") or "freshclam failed").strip()
+                self._show_error(err_txt)
+                return
             self.app_window.refresh_all(force=True)
-        except Exception as exc:
-            self._show_error(str(exc))
+
+        run_ui_task(
+            self.app_window,
+            self.app_window.controller.update_antimalware_signatures,
+            on_success=_done,
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
 
     def _save_am_exclusions(self, raw_text: str) -> None:
         items = [part.strip() for part in raw_text.split(",") if part.strip()]
@@ -699,7 +708,7 @@ class ModuleDetailPage(Gtk.Box):
         self.app_window.controller.invalidate_cache("antimalware")
         self.app_window.refresh_all(force=True)
 
-    def _on_enable_firewall(self, *_args: object) -> None:
+    def _on_enable_firewall(self, btn: Any = None, *_args: object) -> None:
         ok = ask_action_confirmation(
             self.app_window,
             title=tr("detail.fw_confirm_title"),
@@ -710,27 +719,29 @@ class ModuleDetailPage(Gtk.Box):
             confirm_effect=tr("detail.fw_confirm_effect"),
         )
         if ok:
-            try:
-                self.app_window.controller.firewall.enable(apply_essential_rules=True)
-                self.app_window.controller.invalidate_cache("firewall")
-                self.app_window.refresh_all(force=True)
-            except Exception as exc:
-                self._show_error(str(exc))
+            run_ui_task(
+                self.app_window,
+                lambda: self.app_window.controller.enable_module("firewall", apply_essential_rules=True),
+                on_success=lambda new_st: self.app_window.apply_module_status("firewall", new_st),
+                on_error=lambda exc: self._show_error(format_error_message(exc)),
+                busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            )
 
     def _set_fw_outbound(self, mode: str) -> None:
         self.app_window.controller.firewall.configure(outbound_mode=mode)
         self.app_window.controller.invalidate_cache("firewall")
         self.app_window.refresh_all(force=True)
 
-    def _on_revoke_fw_rule(self, rule_id: str) -> None:
-        try:
-            self.app_window.controller.firewall.revoke_rule(rule_id)
-            self.app_window.controller.invalidate_cache("firewall")
-            self.app_window.refresh_all(force=True)
-        except Exception as exc:
-            self._show_error(str(exc))
+    def _on_revoke_fw_rule(self, rule_id: str, btn: Any = None) -> None:
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.revoke_firewall_rule(rule_id),
+            on_success=lambda _ok: self.app_window.refresh_all(force=True),
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
 
-    def _on_disable_module(self, mod_id: str) -> None:
+    def _on_disable_module(self, mod_id: str, btn: Any = None) -> None:
         friendly = friendly_module_name(
             mod_id,
             self.app_window.controller.manifests[mod_id].display_name,
@@ -745,12 +756,13 @@ class ModuleDetailPage(Gtk.Box):
             confirm_effect=tr("detail.disable_confirm_effect"),
         )
         if ok:
-            try:
-                self.app_window.controller.services[mod_id].disable(revert_suite_changes=True)
-                self.app_window.controller.invalidate_cache(mod_id)
-                self.app_window.refresh_all(force=True)
-            except Exception as exc:
-                self._show_error(str(exc))
+            run_ui_task(
+                self.app_window,
+                lambda: self.app_window.controller.disable_module(mod_id, revert_suite_changes=True),
+                on_success=lambda new_st: self.app_window.apply_module_status(mod_id, new_st),
+                on_error=lambda exc: self._show_error(format_error_message(exc)),
+                busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            )
 
     def _show_error(self, message: str) -> None:
         ask_action_confirmation(

@@ -162,6 +162,15 @@ class SettingsPage(Gtk.Box):
         auto_card.pack_start(asi_row, False, False, 0)
         _add_divider(auto_card)
 
+        self.post_scan_action_combo = Gtk.ComboBoxText()
+        self.post_scan_action_combo.set_size_request(220, -1)
+        self.post_scan_action_combo.connect("changed", self._on_changed)
+        psa_row, self._post_scan_title_lbl, self._post_scan_sub_lbl = _make_pref_row(
+            "", "", self.post_scan_action_combo
+        )
+        auto_card.pack_start(psa_row, False, False, 0)
+        _add_divider(auto_card)
+
         self.auto_db_switch = Gtk.Switch()
         self.auto_db_switch.connect("notify::active", self._on_changed)
         adb_row, self._auto_db_title_lbl, self._auto_db_sub_lbl = _make_pref_row(
@@ -262,6 +271,7 @@ class SettingsPage(Gtk.Box):
         density: str | None = None,
         pause_policy: str | None = None,
         auto_scan_interval: str | None = None,
+        default_scan_post_action: str | None = None,
     ) -> None:
         _repopulate_combo(
             self.theme_combo,
@@ -308,6 +318,15 @@ class SettingsPage(Gtk.Box):
                 ("weekly", tr("settings.interval_weekly")),
             ),
             auto_scan_interval,
+        )
+        _repopulate_combo(
+            self.post_scan_action_combo,
+            (
+                ("none", tr("scans.post_none")),
+                ("suspend", tr("scans.post_suspend")),
+                ("shutdown", tr("scans.post_shutdown")),
+            ),
+            default_scan_post_action,
         )
 
     def _populate_about(self) -> None:
@@ -424,6 +443,14 @@ class SettingsPage(Gtk.Box):
             set_accessible(self.auto_scan_interval_combo, tr("settings.auto_scan_interval_row"))
             self.auto_scan_interval_combo.set_sensitive(cfg.auto_quick_scan_enabled)
 
+            self._post_scan_title_lbl.set_text(tr("settings.post_scan_row"))
+            self._post_scan_sub_lbl.set_text(tr("settings.post_scan_sub"))
+            set_accessible(
+                self.post_scan_action_combo,
+                tr("settings.post_scan_a11y"),
+                tr("settings.post_scan_desc"),
+            )
+
             self._auto_db_title_lbl.set_text(tr("settings.auto_db_row"))
             self._auto_db_sub_lbl.set_text(tr("settings.auto_db_desc"))
             self.auto_db_switch.set_active(cfg.auto_db_update_enabled)
@@ -465,6 +492,7 @@ class SettingsPage(Gtk.Box):
                 density=cfg.density,
                 pause_policy=cfg.pause_policy,
                 auto_scan_interval=cfg.auto_quick_scan_interval,
+                default_scan_post_action=cfg.default_scan_post_action,
             )
             self._last_theme_sig = (cfg.theme_mode, cfg.theme_preset)
             self._about_lang = None
@@ -494,6 +522,7 @@ class SettingsPage(Gtk.Box):
             self.auto_scan_switch.set_active(cfg.auto_quick_scan_enabled)
             self.auto_scan_interval_combo.set_active_id(cfg.auto_quick_scan_interval)
             self.auto_scan_interval_combo.set_sensitive(cfg.auto_quick_scan_enabled)
+            self.post_scan_action_combo.set_active_id(cfg.default_scan_post_action)
             self.auto_db_switch.set_active(cfg.auto_db_update_enabled)
             self.dnd_switch.set_active(cfg.do_not_disturb)
             self.game_mode_switch.set_active(cfg.game_mode)
@@ -520,6 +549,7 @@ class SettingsPage(Gtk.Box):
         lang_changed = new_lang != get_language()
         auto_scan_on = self.auto_scan_switch.get_active()
         self.auto_scan_interval_combo.set_sensitive(auto_scan_on)
+        new_post_scan = self.post_scan_action_combo.get_active_id() or "none"
 
         self.app_window.controller.config_store.update(
             language=new_lang,
@@ -536,7 +566,10 @@ class SettingsPage(Gtk.Box):
             notifications_grouped=self.chk_grouped.get_active(),
             removable_media_prompt=self.chk_media.get_active(),
             history_enabled=self.chk_history.get_active(),
+            default_scan_post_action=new_post_scan,
         )
+        if hasattr(self.app_window, "scans_page"):
+            self.app_window.scans_page.sync_default_post_action(new_post_scan)
         try:
             self.app_window.controller.ensure_default_automation()
         except Exception:  # noqa: BLE001

@@ -38,6 +38,7 @@ class CommandRunner(Protocol):
         env: dict[str, str] | None = None,
         on_line: Callable[[str], None] | None = None,
         cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> CommandResult:
         ...
 
@@ -77,9 +78,10 @@ class SubprocessRunner:
         env: dict[str, str] | None = None,
         on_line: Callable[[str], None] | None = None,
         cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> CommandResult:
-        # Caminho rápido síncrono sem threads nem polling quando não há streaming/cancelamento
-        if on_line is None and cancel_event is None:
+        # Caminho rápido síncrono sem threads nem polling quando não há streaming/cancelamento/pausa
+        if on_line is None and cancel_event is None and pause_event is None:
             try:
                 res = subprocess.run(
                     argv,
@@ -140,18 +142,20 @@ class SubprocessRunner:
                 timed_out=False,
             )
 
-        def _terminate_pg(p: subprocess.Popen[str]) -> None:
+        def _signal_pg(p: subprocess.Popen[str], sig: int) -> None:
             try:
-                os.killpg(p.pid, signal.SIGTERM)
+                os.killpg(p.pid, sig)
             except ProcessLookupError:
-                return
+                pass
+
+        def _terminate_pg(p: subprocess.Popen[str]) -> None:
+            # Garante retomada antes do SIGTERM caso o grupo esteja em SIGSTOP
+            _signal_pg(p, signal.SIGCONT)
+            _signal_pg(p, signal.SIGTERM)
             try:
                 p.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    p.kill()
+                _signal_pg(p, signal.SIGKILL)
 
         with proc_cm as proc:
             stdout_lines: list[str] = []
@@ -173,11 +177,35 @@ class SubprocessRunner:
             t_err.start()
 
             deadline = time.monotonic() + timeout if timeout is not None else None
+            paused_pg = False
+            pause_started: float | None = None
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
+                    paused_pg = False
                     _terminate_pg(proc)
                     break
+
+                want_pause = pause_event is not None and pause_event.is_set()
+                if want_pause and not paused_pg:
+                    _signal_pg(proc, signal.SIGSTOP)
+                    paused_pg = True
+                    pause_started = time.monotonic()
+                elif not want_pause and paused_pg:
+                    _signal_pg(proc, signal.SIGCONT)
+                    paused_pg = False
+                    if deadline is not None and pause_started is not None:
+                        deadline += time.monotonic() - pause_started
+                    pause_started = None
+
+                if paused_pg:
+                    if proc.poll() is not None:
+                        _signal_pg(proc, signal.SIGCONT)
+                        paused_pg = False
+                        break
+                    time.sleep(0.05)
+                    continue
+
                 if deadline is not None and time.monotonic() > deadline:
                     timed_out = True
                     _terminate_pg(proc)
@@ -188,6 +216,8 @@ class SubprocessRunner:
                 except subprocess.TimeoutExpired:
                     continue
 
+            if paused_pg:
+                _signal_pg(proc, signal.SIGCONT)
             proc.wait()
             t_out.join(timeout=2.0)
             t_err.join(timeout=2.0)

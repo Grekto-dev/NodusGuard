@@ -322,8 +322,10 @@ class FirewallService(ModuleService):
     def enable(self, **options: Any) -> ModuleStatus:
         """Ativa UFW com confirmação administrativa, registrando regras gerenciadas pela suíte."""
         caller_uid = options.get("caller_uid")
+        preauthorized = bool(options.get("_preauthorized", False))
         apply_essential = bool(options.get("apply_essential_rules", True))
-        self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
+        if not preauthorized:
+            self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
 
         ufw_bin = self.runner.which("ufw")
         if not ufw_bin:
@@ -398,9 +400,11 @@ class FirewallService(ModuleService):
         action: str = "ALLOW",
         scope: str = "Regra adicionada pelo usuário",
         caller_uid: int | None = None,
+        preauthorized: bool = False,
     ) -> FirewallRule:
         """Adiciona uma regra gerenciada pela suíte com suporte a revogação."""
-        self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
+        if not preauthorized:
+            self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
         ufw_bin = self.runner.which("ufw")
         if not ufw_bin:
             raise FileNotFoundError("Binário ufw não encontrado.")
@@ -419,9 +423,16 @@ class FirewallService(ModuleService):
         )
         return rule
 
-    def revoke_rule(self, rule_id: str, *, caller_uid: int | None = None) -> bool:
+    def revoke_rule(
+        self,
+        rule_id: str,
+        *,
+        caller_uid: int | None = None,
+        preauthorized: bool = False,
+    ) -> bool:
         """Revoga uma regra específica criada pela suíte preservando regras externas."""
-        self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
+        if not preauthorized:
+            self.authorizer.require("org.mintsecurity.firewall.configure", caller_uid=caller_uid)
         ufw_bin = self.runner.which("ufw")
         if not ufw_bin:
             raise FileNotFoundError("Binário ufw não encontrado.")
@@ -456,10 +467,17 @@ class FirewallService(ModuleService):
         )
         return True
 
-    def disable(self, *, revert_suite_changes: bool = False, caller_uid: int | None = None) -> ModuleStatus:
+    def disable(
+        self,
+        *,
+        revert_suite_changes: bool = False,
+        caller_uid: int | None = None,
+        preauthorized: bool = False,
+    ) -> ModuleStatus:
         """Desativa UFW e, se pedido, reverte apenas as regras gerenciadas pela suíte."""
         action_id = "org.mintsecurity.firewall.reset" if revert_suite_changes else "org.mintsecurity.firewall.configure"
-        self.authorizer.require(action_id, caller_uid=caller_uid)
+        if not preauthorized:
+            self.authorizer.require(action_id, caller_uid=caller_uid)
         ufw_bin = self.runner.which("ufw")
         if not ufw_bin:
             raise FileNotFoundError("Binário ufw não encontrado.")

@@ -55,3 +55,13 @@ def format_bytes(size: int) -> str:
 def utc_now_iso() -> str:
     """Retorna timestamp UTC ISO-8601 para comparações determinísticas."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def format_error_message(exc: Exception) -> str:
+    """Extrai mensagem legível de exceções locais ou D-Bus sem prefixos internos."""
+    getter = getattr(exc, "get_dbus_message", None)
+    if callable(getter):
+        msg = str(getter() or "").strip()
+        if msg:
+            return msg
+    return str(exc).strip() or exc.__class__.__name__

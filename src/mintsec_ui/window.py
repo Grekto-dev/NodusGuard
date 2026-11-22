@@ -13,6 +13,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from mintsec import APP_NAME  # noqa: E402
+from mintsec.formatting import format_error_message  # noqa: E402
 from mintsec.services.catalog import SuiteController  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
@@ -327,6 +328,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self._anim_sig = None
         if getattr(self, "tray", None) is not None:
             self.tray.destroy()
+        self.scans_page.cancel_post_action_countdown()
         self.scans_page.cancel_scan()
         self.theme_manager.cleanup()
 
@@ -683,12 +685,12 @@ class SuiteWindow(Gtk.ApplicationWindow):
             ok = False
             err_msg = ""
             try:
-                res = self.controller.antimalware.update_signatures()
+                res = self.controller.update_antimalware_signatures()
                 ok = bool(res.get("ok"))
                 if not ok:
-                    err_msg = str(res.get("stderr") or res.get("stdout") or "freshclam failed")
+                    err_msg = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
             except Exception as exc:  # noqa: BLE001
-                err_msg = str(exc)
+                err_msg = format_error_message(exc)
 
             def _done() -> bool:
                 self._updating_db = False

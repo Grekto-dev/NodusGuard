@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from mintsec.auth import CallerAuthorizer
 from mintsec.autostart import sync_autostart as sync_autostart_file
-from mintsec.config import VALID_PAUSE_MODES, ConfigStore, SuiteConfig
+from mintsec.config import VALID_PAUSE_MODES, VALID_SCAN_POST_ACTIONS, ConfigStore, SuiteConfig
 from mintsec.contracts import (
     ModuleManifest,
     ModuleState,
@@ -26,7 +26,10 @@ from mintsec.history import HistoryStore
 from mintsec.incident import IncidentManager
 from mintsec.packaging import AptKitInstaller, PackageInspector
 from mintsec.pending import PendingStore
+from mintsec.power import execute_post_scan_action as run_post_scan_power_action
 from mintsec.runner import CommandRunner, SubprocessRunner
+
+SYSTEM_PRIVILEGED_MODULES = frozenset({"firewall", "browsing"})
 from mintsec.services.antimalware import AntimalwareService
 from mintsec.services.base import ModuleService
 from mintsec.services.browsing import BrowsingService
@@ -107,7 +110,9 @@ class SuiteController:
         installer: AptKitInstaller | None = None,
         data_dir: Path | None = None,
         clamav_db_dir: Path | None = None,
+        post_scan_executor: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
+        self._post_scan_executor = post_scan_executor
         self.manifests: dict[str, ModuleManifest] = load_manifests(manifests_dir)
         self.config_store = config_store or ConfigStore()
         cfg = self.config_store.load()
@@ -213,6 +218,196 @@ class SuiteController:
                 return None
             return {mid: self._status_cache[mid] for mid in self.MODULE_ORDER if mid in self._status_cache}
 
+    def _use_system_bus(self) -> bool:
+        return self.is_live_host_runner and is_system_bus_mode()
+
+    def _overlay_firewall_user_state(self, status: ModuleStatus) -> ModuleStatus:
+        """Mescla preferências e estado do usuário (saída/OpenSnitch) no status vindo do daemon."""
+        cfg = self.config_store.load()
+        details = dict(status.details)
+        details["outbound_mode"] = cfg.firewall_outbound_mode
+        details["trust_rules"] = [r.to_dict() for r in self.firewall.trust_store.list_rules()]
+        details["denials"] = self.firewall.opensnitch.list_denials()
+        opensnitch_installed = bool(details.get("opensnitch_installed", False))
+        mode_summary = status.mode_summary
+        if status.state == ModuleState.ATIVO:
+            out_label = (
+                "Saída em bloqueio por aplicativo"
+                if cfg.firewall_outbound_mode == "block_per_app" and opensnitch_installed
+                else "Saída em monitoramento"
+            )
+            mode_summary = f"Firewall de entrada ativo · {out_label}"
+        return ModuleStatus(
+            module_id=status.module_id or "firewall",
+            display_name=status.display_name or self.manifests["firewall"].display_name,
+            state=status.state,
+            installed_version=status.installed_version,
+            package_origin=status.package_origin,
+            mode_summary=mode_summary,
+            last_confirmed_at=status.last_confirmed_at,
+            evidence=status.evidence,
+            degraded_reason=status.degraded_reason,
+            needs_setup=status.needs_setup,
+            phase=status.phase,
+            experimental=status.experimental,
+            details=details,
+        )
+
+    def _query_module(self, module_id: str) -> ModuleStatus:
+        if module_id == "firewall" and self._use_system_bus():
+            data = self.dbus_client.query_status("firewall", self.firewall)
+            return self._overlay_firewall_user_state(ModuleStatus.from_dict(data))
+        return self.services[module_id].query_status()
+
+    def _sync_user_module_flag(self, module_id: str, enabled: bool) -> None:
+        svc = self.services.get(module_id)
+        if svc is None:
+            return
+        svc._set_module_enabled_flag(enabled)
+        if module_id == "browsing":
+            b_state = self.browsing._load_state()
+            b_state["enabled"] = bool(enabled)
+            if enabled:
+                b_state["last_confirmed_at"] = now_iso()
+            self.browsing._save_state(b_state)
+
+    def enable_module(self, module_id: str, **options: Any) -> ModuleStatus:
+        """Ativa um módulo usando daemon D-Bus privilegiado quando aplicável."""
+        svc = self.services[module_id]
+        if module_id in SYSTEM_PRIVILEGED_MODULES and self._use_system_bus():
+            raw = self.dbus_client.enable(module_id, svc, options or None)
+            st = ModuleStatus.from_dict(raw)
+            self._sync_user_module_flag(module_id, st.state == ModuleState.ATIVO)
+            if module_id == "firewall":
+                st = self._overlay_firewall_user_state(st)
+                self.history_store.record(
+                    module_id="firewall",
+                    action="Firewall de entrada ativado",
+                    reason="UFW ativado com visualização prévia de regras essenciais.",
+                    confirmation_state="confirmed",
+                    actor="user",
+                    reversible=True,
+                    revert_action="disable_firewall_revert",
+                )
+            else:
+                self.history_store.record(
+                    module_id="browsing",
+                    action="Filtro DNS local ativado",
+                    reason="Filtro local habilitado pelo serviço administrativo.",
+                    confirmation_state="confirmed",
+                    actor="user",
+                    reversible=True,
+                )
+            self.invalidate_cache(module_id)
+            return st
+        st = svc.enable(**options)
+        self.invalidate_cache(module_id)
+        return st
+
+    def disable_module(self, module_id: str, *, revert_suite_changes: bool = False) -> ModuleStatus:
+        """Desativa um módulo usando daemon D-Bus privilegiado quando aplicável."""
+        svc = self.services[module_id]
+        if module_id in SYSTEM_PRIVILEGED_MODULES and self._use_system_bus():
+            raw = self.dbus_client.disable(
+                module_id,
+                svc,
+                revert_suite_changes=revert_suite_changes,
+            )
+            st = ModuleStatus.from_dict(raw)
+            self._sync_user_module_flag(module_id, st.state == ModuleState.ATIVO)
+            if module_id == "firewall":
+                st = self._overlay_firewall_user_state(st)
+                self.history_store.record(
+                    module_id="firewall",
+                    action="Firewall desativado",
+                    reason=(
+                        "Regras criadas pela suíte revertidas; regras externas preservadas."
+                        if revert_suite_changes
+                        else "Regras existentes mantidas no sistema."
+                    ),
+                    confirmation_state="confirmed",
+                    actor="user",
+                )
+            else:
+                self.history_store.record(
+                    module_id="browsing",
+                    action="Filtro DNS local desativado",
+                    reason="Configuração DNS anterior restaurada." if revert_suite_changes else "Filtro pausado.",
+                    confirmation_state="confirmed",
+                    actor="user",
+                )
+            self.invalidate_cache(module_id)
+            return st
+        st = svc.disable(revert_suite_changes=revert_suite_changes)
+        self.invalidate_cache(module_id)
+        return st
+
+    def revoke_firewall_rule(self, rule_id: str) -> bool:
+        """Revoga regra gerenciada do firewall roteando pelo serviço root no modo instalado."""
+        if self._use_system_bus():
+            res = self.dbus_client.revoke_firewall_rule(rule_id, self.firewall)
+            ok = bool(res.get("ok", False))
+            if ok:
+                self.history_store.record(
+                    module_id="firewall",
+                    action="Regra de firewall revogada",
+                    reason=f"Regra {rule_id} removida.",
+                    confirmation_state="confirmed",
+                    actor="user",
+                )
+            self.invalidate_cache("firewall")
+            return ok
+        ok = bool(self.firewall.revoke_rule(rule_id))
+        self.invalidate_cache("firewall")
+        return ok
+
+    def update_antimalware_signatures(self) -> dict[str, Any]:
+        """Atualiza assinaturas ClamAV com FreshClam via serviço root quando instalado."""
+        if self._use_system_bus():
+            res = self.dbus_client.update_antimalware_signatures(self.antimalware)
+            ok = bool(res.get("ok"))
+            if ok:
+                am_state = self.antimalware._load_state()
+                am_state["last_signature_update_at"] = now_iso()
+                self.antimalware._save_state(am_state)
+            self.history_store.record(
+                module_id="antimalware",
+                action="Atualização de assinaturas ClamAV",
+                reason=(
+                    "FreshClam concluído com sucesso."
+                    if ok
+                    else f"Falha FreshClam: {str(res.get('stderr') or '').strip()}"
+                ),
+                confirmation_state="confirmed" if ok else "failed",
+                actor="suite",
+                evidence=str(res.get("stdout") or "").strip()[:300],
+            )
+            self.invalidate_cache("antimalware")
+            return res
+        res = self.antimalware.update_signatures()
+        self.invalidate_cache("antimalware")
+        return res
+
+    def execute_post_scan_action(self, action: str) -> dict[str, Any]:
+        """Executa ação configurada ao término do scan (nada, suspender ou desligar)."""
+        clean = str(action).strip()
+        if clean not in VALID_SCAN_POST_ACTIONS:
+            raise ValueError(f"Ação pós-scan inválida: {action}")
+        if clean == "none":
+            return {"ok": True, "action": "none", "method": "noop"}
+        self.history_store.record(
+            module_id="antimalware",
+            action=f"Ação pós-scan: {clean}",
+            reason="Executada após término da verificação conforme escolha do usuário.",
+            confirmation_state="confirmed",
+            actor="user",
+        )
+        if self._post_scan_executor is not None:
+            return dict(self._post_scan_executor(clean))
+        if not self.is_live_host_runner:
+            return {"ok": True, "action": clean, "method": "simulated"}
+        return run_post_scan_power_action(clean, runner=self.runner)
+
     def get_module_status(
         self,
         module_id: str,
@@ -225,7 +420,7 @@ class SuiteController:
             with self._cache_lock:
                 if (time.monotonic() - self._status_cache_ts) <= max_age_secs and module_id in self._status_cache:
                     return self._status_cache[module_id]
-        st = self.services[module_id].query_status()
+        st = self._query_module(module_id)
         with self._cache_lock:
             self._status_cache[module_id] = st
             if len(self._status_cache) >= len(self.services) and self._status_cache_ts == 0.0:
@@ -274,12 +469,12 @@ class SuiteController:
             self._prime_packages()
             results: dict[str, ModuleStatus] = {}
             with ThreadPoolExecutor(max_workers=len(mids) or 1) as pool:
-                future_map = {mid: pool.submit(self.services[mid].query_status) for mid in mids}
+                future_map = {mid: pool.submit(self._query_module, mid) for mid in mids}
                 for mid in mids:
                     results[mid] = future_map[mid].result()
             ordered = results
         else:
-            ordered = {mid: self.services[mid].query_status() for mid in mids}
+            ordered = {mid: self._query_module(mid) for mid in mids}
 
         with self._cache_lock:
             self._status_cache = dict(ordered)
@@ -505,9 +700,9 @@ class SuiteController:
         self.config_store.save(cfg)
 
         if enable_antimalware and self.antimalware.query_status().state != ModuleState.AUSENTE:
-            self.antimalware.enable()
-        if enable_firewall and self.firewall.query_status().state != ModuleState.AUSENTE:
-            self.firewall.enable(apply_essential_rules=True)
+            self.enable_module("antimalware")
+        if enable_firewall and self._query_module("firewall").state != ModuleState.AUSENTE:
+            self.enable_module("firewall", apply_essential_rules=True)
         self.invalidate_cache()
         return cfg
 

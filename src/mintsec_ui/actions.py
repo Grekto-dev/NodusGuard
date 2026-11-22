@@ -2,12 +2,65 @@
 
 from __future__ import annotations
 
-from typing import Any
+import threading
+from typing import Any, Callable
+
+import gi
+
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib  # noqa: E402
 
 from mintsec.contracts import ModuleState  # noqa: E402
+from mintsec.formatting import format_error_message  # noqa: E402
+from mintsec.services.catalog import SYSTEM_PRIVILEGED_MODULES  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import tr  # noqa: E402
 from mintsec_ui.widgets import friendly_module_name  # noqa: E402
+
+
+def run_ui_task(
+    app_window: Any,
+    work_fn: Callable[[], Any],
+    *,
+    on_success: Callable[[Any], None],
+    on_error: Callable[[Exception], None],
+    busy_widget: Any = None,
+) -> None:
+    """Executa operação longa fora da thread GTK no host real, mantendo testes síncronos."""
+    if not app_window.controller.is_live_host_runner:
+        try:
+            res = work_fn()
+        except Exception as exc:  # noqa: BLE001
+            on_error(exc)
+            return
+        on_success(res)
+        return
+
+    if busy_widget is not None:
+        busy_widget.set_sensitive(False)
+
+    def _worker() -> None:
+        try:
+            res = work_fn()
+            err: Exception | None = None
+        except Exception as exc:  # noqa: BLE001
+            res = None
+            err = exc
+
+        def _finish() -> bool:
+            if getattr(app_window, "_destroyed", False):
+                return False
+            if busy_widget is not None:
+                busy_widget.set_sensitive(True)
+            if err is not None:
+                on_error(err)
+            else:
+                on_success(res)
+            return False
+
+        GLib.idle_add(_finish)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def trigger_module_install(app_window: Any, mod_id: str) -> None:
@@ -61,20 +114,37 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
         if mod_id == "recovery" and st.needs_setup:
             app_window.navigate_to("recovery", tab="files")
             return True
-        try:
-            new_st = controller.services[mod_id].enable()
+
+        def _on_enable_ok(new_st: Any) -> None:
             app_window.apply_module_status(mod_id, new_st)
-            return False
-        except Exception as exc:
+
+        def _on_enable_err(exc: Exception) -> None:
             ask_action_confirmation(
                 app_window,
                 title=tr("actions.enable_err_title", name=friendly_name),
-                summary=str(exc),
+                summary=format_error_message(exc),
                 actor=friendly_name,
                 evidence=tr("actions.enable_err_evidence"),
                 confirm_label=tr("common.understood"),
                 confirm_effect=tr("common.close_notice"),
             )
+            app_window.refresh_all(force=False)
+
+        if controller.is_live_host_runner and mod_id in SYSTEM_PRIVILEGED_MODULES:
+            run_ui_task(
+                app_window,
+                lambda: controller.enable_module(mod_id),
+                on_success=_on_enable_ok,
+                on_error=_on_enable_err,
+            )
+            return True
+
+        try:
+            new_st = controller.enable_module(mod_id)
+            _on_enable_ok(new_st)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _on_enable_err(exc)
             return True
 
     # Desativação com confirmação reversível
@@ -89,18 +159,35 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
     )
     if not ok:
         return True
-    try:
-        new_st = controller.services[mod_id].disable(revert_suite_changes=True)
+
+    def _on_disable_ok(new_st: Any) -> None:
         app_window.apply_module_status(mod_id, new_st)
-        return False
-    except Exception as exc:
+
+    def _on_disable_err(exc: Exception) -> None:
         ask_action_confirmation(
             app_window,
             title=tr("actions.disable_err_title", name=friendly_name),
-            summary=str(exc),
+            summary=format_error_message(exc),
             actor=friendly_name,
             evidence=tr("actions.disable_err_evidence"),
             confirm_label=tr("common.understood"),
             confirm_effect=tr("common.close_notice"),
         )
+        app_window.refresh_all(force=False)
+
+    if controller.is_live_host_runner and mod_id in SYSTEM_PRIVILEGED_MODULES:
+        run_ui_task(
+            app_window,
+            lambda: controller.disable_module(mod_id, revert_suite_changes=True),
+            on_success=_on_disable_ok,
+            on_error=_on_disable_err,
+        )
+        return True
+
+    try:
+        new_st = controller.disable_module(mod_id, revert_suite_changes=True)
+        _on_disable_ok(new_st)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        _on_disable_err(exc)
         return True
