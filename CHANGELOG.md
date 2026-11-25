@@ -5,6 +5,13 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-11-25
+
+### Added
+- **Configurable System Title Bar (`use_system_titlebar`)**:
+  - Added a **Use system title bar** checkbox in **Settings → General**, defaulting to `true` (native system SSD window frame).
+  - Unchecking switches live between native window borders (SSD) and NodusGuard's flat integrated `Gtk.HeaderBar` (CSD) while preserving window visibility, size, position, maximize state, and dark/light/high-contrast theme consistency.
+
 ## [0.2.2] - 2026-11-25
 
 ### Added

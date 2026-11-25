@@ -104,6 +104,15 @@ class SettingsPage(Gtk.Box):
         app_card.pack_start(theme_row, False, False, 0)
         _add_divider(app_card)
         app_card.pack_start(preset_row, False, False, 0)
+        _add_divider(app_card)
+
+        self.chk_system_titlebar = Gtk.CheckButton(label="")
+        self.chk_system_titlebar.connect("toggled", self._on_changed)
+        self._sys_titlebar_note_lbl = Gtk.Label(label="", xalign=0.0)
+        self._sys_titlebar_note_lbl.set_line_wrap(True)
+        self._sys_titlebar_note_lbl.get_style_context().add_class("mintsec-muted")
+        app_card.pack_start(self.chk_system_titlebar, False, False, 0)
+        app_card.pack_start(self._sys_titlebar_note_lbl, False, False, 0)
         app_wrap.pack_start(app_card, False, False, 0)
 
         startup_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -421,6 +430,15 @@ class SettingsPage(Gtk.Box):
             self._preset_sub_lbl.set_text(tr("settings.preset_sub"))
             set_accessible(self.preset_combo, tr("settings.preset_a11y"), tr("settings.preset_desc"))
 
+            self.chk_system_titlebar.set_label(tr("settings.chk_system_titlebar"))
+            self.chk_system_titlebar.set_active(cfg.use_system_titlebar)
+            set_accessible(
+                self.chk_system_titlebar,
+                tr("settings.chk_system_titlebar_a11y"),
+                tr("settings.chk_system_titlebar_desc"),
+            )
+            self._sys_titlebar_note_lbl.set_text(tr("settings.chk_system_titlebar_note"))
+
             self._disp_exp.set_label(tr("settings.disp_expander"))
             set_accessible(self._disp_exp, tr("settings.disp_expander"), tr("settings.disp_expander_desc"))
             self._dens_title_lbl.set_text(tr("settings.density_title"))
@@ -516,6 +534,7 @@ class SettingsPage(Gtk.Box):
             self.language_combo.set_active_id(cfg.language)
             self.theme_combo.set_active_id(cfg.theme_mode)
             self.preset_combo.set_active_id(cfg.theme_preset)
+            self.chk_system_titlebar.set_active(cfg.use_system_titlebar)
             self.density_combo.set_active_id(cfg.density)
             self.policy_combo.set_active_id(cfg.pause_policy)
             self.autostart_switch.set_active(cfg.autostart_enabled)
@@ -550,11 +569,13 @@ class SettingsPage(Gtk.Box):
         auto_scan_on = self.auto_scan_switch.get_active()
         self.auto_scan_interval_combo.set_sensitive(auto_scan_on)
         new_post_scan = self.post_scan_action_combo.get_active_id() or "none"
+        use_sys_tb = self.chk_system_titlebar.get_active()
 
         self.app_window.controller.config_store.update(
             language=new_lang,
             theme_mode=self.theme_combo.get_active_id() or "follow_system",
             theme_preset=self.preset_combo.get_active_id() or "lavender",
+            use_system_titlebar=use_sys_tb,
             density=self.density_combo.get_active_id() or "essential",
             pause_policy=self.policy_combo.get_active_id() or "unset",
             autostart_enabled=self.autostart_switch.get_active(),
@@ -568,6 +589,8 @@ class SettingsPage(Gtk.Box):
             history_enabled=self.chk_history.get_active(),
             default_scan_post_action=new_post_scan,
         )
+        if hasattr(self.app_window, "apply_titlebar_preference"):
+            self.app_window.apply_titlebar_preference(use_sys_tb)
         if hasattr(self.app_window, "scans_page"):
             self.app_window.scans_page.sync_default_post_action(new_post_scan)
         try:

@@ -81,6 +81,8 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self._high_contrast = False
         self._auto_scanning = False
         self._updating_db = False
+        self._use_system_titlebar: bool | None = None
+        self._csd_headerbar: Gtk.HeaderBar | None = None
         self._anim_sig: int | None = None
         self._bg_timer_id: int | None = None
         self._cached_statuses: dict[str, Any] | None = None
@@ -279,6 +281,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.connect("size-allocate", self._on_size_allocate)
         self.connect("delete-event", self._on_delete_event)
         self.connect("destroy", self._on_destroy)
+        self.apply_titlebar_preference(self.controller.config_store.load().use_system_titlebar)
         self.show_all()
         self.apply_theme()
         self._update_nav_highlight("home")
@@ -330,6 +333,7 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self.tray.destroy()
         self.scans_page.cancel_post_action_countdown()
         self.scans_page.cancel_scan()
+        self._csd_headerbar = None
         self.theme_manager.cleanup()
 
     def _make_nav_button(self, page_id: str, label: str, icon_name: str) -> tuple[Gtk.Button, Gtk.Label]:
@@ -420,13 +424,70 @@ class SuiteWindow(Gtk.ApplicationWindow):
 
         self.refresh_all(force=False)
 
-    def _update_current_page_title(self) -> None:
+    def _current_page_title_text(self) -> str:
         if self.current_page == "module_detail":
             mod_id = self.module_detail_page.current_module_id
-            title = friendly_module_name(mod_id, self.controller.manifests[mod_id].display_name)
-        else:
-            title = tr(f"page.{self.current_page}")
+            return friendly_module_name(mod_id, self.controller.manifests[mod_id].display_name)
+        return tr(f"page.{self.current_page}")
+
+    def _update_current_page_title(self) -> None:
+        title = self._current_page_title_text()
         self.page_title_lbl.set_text(title)
+        if self._csd_headerbar is not None:
+            self._csd_headerbar.set_subtitle(title)
+
+    def _build_csd_headerbar(self) -> Gtk.HeaderBar:
+        hb = Gtk.HeaderBar()
+        hb.get_style_context().add_class("mintsec-csd-headerbar")
+        hb.set_show_close_button(True)
+        hb.set_title(APP_NAME)
+        hb.set_subtitle(self._current_page_title_text())
+        hb.show_all()
+        return hb
+
+    def apply_titlebar_preference(self, use_system_titlebar: bool | None = None) -> None:
+        """Alterna dinamicamente entre barra de título do sistema (SSD) e HeaderBar integrada (CSD)."""
+        desired = (
+            bool(use_system_titlebar)
+            if use_system_titlebar is not None
+            else bool(self.controller.config_store.load().use_system_titlebar)
+        )
+        if self._use_system_titlebar is desired:
+            return
+
+        was_realized = bool(self.get_realized())
+        was_visible = bool(self.get_visible())
+        pos = self.get_position() if was_realized else None
+        size = self.get_size() if was_realized else None
+        was_maximized = bool(self.is_maximized()) if (was_realized and was_visible) else False
+
+        if was_realized:
+            if was_visible:
+                self.hide()
+            self.unrealize()
+
+        if desired:
+            self.set_titlebar(None)
+            self.set_decorated(True)
+            self._csd_headerbar = None
+        else:
+            hb = self._build_csd_headerbar()
+            self.set_titlebar(hb)
+            self._csd_headerbar = hb
+
+        self._use_system_titlebar = desired
+
+        if was_realized:
+            if size is not None:
+                self.resize(max(360, int(size[0])), max(420, int(size[1])))
+            if was_visible:
+                self.show()
+                if was_maximized:
+                    self.maximize()
+                elif pos is not None:
+                    self.move(int(pos[0]), int(pos[1]))
+                self.present()
+            self._sync_animations_pref()
 
     def _update_nav_highlight(self, page_id: str) -> None:
         active_nav = "protections" if page_id == "module_detail" else page_id

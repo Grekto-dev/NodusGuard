@@ -547,6 +547,40 @@ def _build_palette_css(t: dict[str, str]) -> str:
         background-color: {t['card_hover']};
         border-color: {t['border']};
     }}
+    .mintsec-window headerbar.mintsec-csd-headerbar,
+    .mintsec-window headerbar.mintsec-csd-headerbar:backdrop {{
+        background-image: none;
+        background-color: {t['sidebar_bg']};
+        color: {t['text_primary']};
+        border-bottom: 1px solid {t['divider']};
+        box-shadow: none;
+        padding: 4px 10px;
+    }}
+    .mintsec-window headerbar.mintsec-csd-headerbar .title {{
+        color: {t['text_primary']};
+        font-weight: 700;
+    }}
+    .mintsec-window headerbar.mintsec-csd-headerbar .subtitle {{
+        color: {t['text_secondary']};
+        font-size: 0.86em;
+    }}
+    .mintsec-window headerbar.mintsec-csd-headerbar button.titlebutton,
+    .mintsec-window headerbar.mintsec-csd-headerbar button.titlebutton:backdrop {{
+        background-image: none;
+        background-color: transparent;
+        color: {t['text_secondary']};
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 3px 7px;
+        min-height: 24px;
+        min-width: 24px;
+        box-shadow: none;
+    }}
+    .mintsec-window headerbar.mintsec-csd-headerbar button.titlebutton:hover {{
+        background-color: {t['sidebar_hover']};
+        color: {t['text_primary']};
+        border-color: {t['divider']};
+    }}
     .mintsec-window button:disabled,
     .mintsec-window button:disabled:backdrop,
     .mintsec-dialog button:disabled,

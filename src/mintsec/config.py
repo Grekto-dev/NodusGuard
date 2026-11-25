@@ -32,6 +32,7 @@ class SuiteConfig:
     theme_preset: str = "lavender"
     density: str = "essential"
     language: str = "en"
+    use_system_titlebar: bool = True
 
     # Política de decisão
     pause_policy: str = "unset"
@@ -136,6 +137,7 @@ class SuiteConfig:
             theme_preset=str(data.get("theme_preset", "lavender")),
             density=str(data.get("density", "essential")),
             language=str(data.get("language", "en")),
+            use_system_titlebar=bool(data.get("use_system_titlebar", True)),
             pause_policy=str(data.get("pause_policy", "unset")),
             firewall_outbound_mode=str(data.get("firewall_outbound_mode", "monitor_only")),
             first_run_completed=bool(data.get("first_run_completed", False)),
