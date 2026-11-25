@@ -13,10 +13,11 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gtk, Pango  # noqa: E402
 
 from mintsec.contracts import ModuleState  # noqa: E402
-from mintsec.formatting import format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
-from mintsec_ui.actions import handle_module_switch, trigger_module_install  # noqa: E402
+from mintsec_ui.actions import handle_module_switch, run_ui_task, trigger_module_install  # noqa: E402
 from mintsec_ui.animations import ProtectionStatusCanvas  # noqa: E402
+from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
@@ -55,6 +56,8 @@ class HomePage(Gtk.Box):
         self._last_cards_sig: tuple[Any, ...] | None = None
         self._last_coverage_sig: tuple[Any, ...] | None = None
         self._last_bottom_sig: tuple[Any, ...] | None = None
+        self._last_recs_data: list[dict[str, Any]] = []
+        self._last_has_scan: bool = False
         self._cta_action: str | None = None
         self._cta_target: str | None = None
 
@@ -131,6 +134,18 @@ class HomePage(Gtk.Box):
         self.recs_heading_lbl.get_style_context().add_class("mintsec-subtitle")
         recs_hdr.pack_start(self.recs_heading_lbl, True, True, 0)
 
+        self.apply_all_recs_btn = Gtk.Button(label="")
+        self.apply_all_recs_btn.get_style_context().add_class("mintsec-primary-cta")
+        self.apply_all_recs_btn.set_no_show_all(True)
+        self.apply_all_recs_btn.connect("clicked", lambda b: self._on_apply_all_recs(b))
+        recs_hdr.pack_start(self.apply_all_recs_btn, False, False, 0)
+
+        self.recs_more_btn = Gtk.Button(label="")
+        self.recs_more_btn.get_style_context().add_class("mintsec-ghost-btn")
+        self.recs_more_btn.set_no_show_all(True)
+        self.recs_more_btn.connect("clicked", lambda b: self._on_show_more_recs(b))
+        recs_hdr.pack_start(self.recs_more_btn, False, False, 0)
+
         self.restore_ignored_btn = Gtk.Button(label=tr("home.recs_restore_btn"))
         self.restore_ignored_btn.get_style_context().add_class("mintsec-ghost-btn")
         self.restore_ignored_btn.set_no_show_all(True)
@@ -141,6 +156,11 @@ class HomePage(Gtk.Box):
 
         self.recs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         recs_wrap.pack_start(self.recs_box, False, False, 0)
+        self.recs_feedback_lbl = Gtk.Label(label="", xalign=0.0)
+        self.recs_feedback_lbl.set_line_wrap(True)
+        self.recs_feedback_lbl.set_no_show_all(True)
+        self.recs_feedback_lbl.get_style_context().add_class("mintsec-muted")
+        recs_wrap.pack_start(self.recs_feedback_lbl, False, False, 0)
         self.recs_revealer.add(recs_wrap)
         self.status_card.pack_start(self.recs_revealer, False, False, 0)
 
@@ -275,21 +295,92 @@ class HomePage(Gtk.Box):
         if rid == "scan_incomplete":
             return tr("home.rec_scan_stale_title"), tr("home.rec_scan_stale_desc"), tr("home.rec_action_scan"), "warn"
         if rid == "enable_antimalware":
-            return tr("home.rec_mod_title", name=friendly_module_name("antimalware", "Antimalware")), tr("home.rec_mod_desc"), tr("home.rec_action_fix_mod"), "warn"
+            return tr("home.rec_mod_title", name=friendly_module_name("antimalware", "Antimalware")), tr("home.rec_mod_desc"), tr("home.rec_action_enable"), "warn"
         if rid == "enable_firewall":
-            return tr("home.rec_mod_title", name=friendly_module_name("firewall", "Firewall")), tr("home.rec_mod_desc"), tr("home.rec_action_fix_mod"), "warn"
+            return tr("home.rec_mod_title", name=friendly_module_name("firewall", "Firewall")), tr("home.rec_mod_desc"), tr("home.rec_action_enable"), "warn"
+        if rid == "enable_browsing":
+            return tr("home.rec_browsing_title"), tr("home.rec_browsing_desc"), tr("home.rec_action_enable"), "accent"
+        if rid.startswith("allow_fw_app:"):
+            app_label = str(rec.get("app_name") or rid.split(":", 1)[1])
+            return tr("home.rec_fw_app_title", app=app_label), tr("home.rec_fw_app_desc", app=app_label), tr("home.rec_action_allow_app"), "accent"
+        if rid == "enable_auto_scan":
+            return tr("home.rec_auto_scan_title"), tr("home.rec_auto_scan_desc"), tr("home.rec_action_enable_auto"), "accent"
         if rid == "run_quick_scan":
             if has_last_scan:
                 return tr("home.rec_scan_stale_title"), tr("home.rec_scan_stale_desc"), tr("home.rec_action_scan"), "accent"
             return tr("home.rec_scan_never_title"), tr("home.rec_scan_never_desc"), tr("home.rec_action_scan"), "accent"
         return tr("home.rec_mod_title", name=friendly_module_name("recovery", "Recovery")), tr("home.rec_mod_desc"), tr("home.rec_action_open"), "accent"
 
+    def _make_rec_row(self, rec: dict[str, Any], *, has_last_scan: bool, compact_pop: bool = False) -> Gtk.Box:
+        title, desc, btn_lbl, tone = self._describe_recommendation(rec, has_last_scan=has_last_scan)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.get_style_context().add_class("mintsec-rec-row")
+
+        ic_name = "dialog-warning-symbolic" if tone in ("crit", "warn") else "security-medium-symbolic"
+        row.pack_start(make_icon_chip(ic_name, pixel_size=16, tone=tone), False, False, 0)
+
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        t_lbl = Gtk.Label(label=title, xalign=0.0)
+        t_lbl.set_ellipsize(Pango.EllipsizeMode.NONE if compact_pop else Pango.EllipsizeMode.END)
+        t_lbl.set_line_wrap(compact_pop)
+        t_lbl.get_style_context().add_class("mintsec-subtitle")
+        d_lbl = Gtk.Label(label=desc, xalign=0.0)
+        d_lbl.set_ellipsize(Pango.EllipsizeMode.NONE if compact_pop else Pango.EllipsizeMode.END)
+        d_lbl.set_line_wrap(compact_pop)
+        d_lbl.get_style_context().add_class("mintsec-muted")
+        info.pack_start(t_lbl, False, False, 0)
+        info.pack_start(d_lbl, False, False, 0)
+        row.pack_start(info, True, True, 0)
+
+        act_btn = Gtk.Button(label=btn_lbl)
+        act_btn.get_style_context().add_class("mintsec-primary-cta")
+        act_btn.set_valign(Gtk.Align.CENTER)
+        set_accessible(act_btn, f"{btn_lbl}: {title}", desc)
+        act_btn.connect("clicked", lambda b, r=rec: self._on_apply_single_rec(r, b))
+        row.pack_start(act_btn, False, False, 0)
+
+        if rec.get("ignorable"):
+            ign_btn = Gtk.Button(label=tr("home.rec_ignore_btn"))
+            ign_btn.get_style_context().add_class("mintsec-ghost-btn")
+            ign_btn.set_valign(Gtk.Align.CENTER)
+            set_accessible(ign_btn, tr("home.rec_ignore_a11y", title=title))
+            ign_btn.connect("clicked", lambda _b, rid=rec["rec_id"]: self._on_ignore_rec(rid))
+            row.pack_start(ign_btn, False, False, 0)
+        return row
+
     def _populate_recommendations(self, recs: list[dict[str, Any]], *, has_last_scan: bool, ignored_count: int) -> None:
+        self._last_recs_data = list(recs)
+        self._last_has_scan = has_last_scan
         self.recs_heading_lbl.set_text(tr("home.recs_heading", count=len(recs)))
         if ignored_count > 0:
             self.restore_ignored_btn.show()
         else:
             self.restore_ignored_btn.hide()
+
+        auto_recs = [r for r in recs if r.get("auto_apply")]
+        if auto_recs:
+            lbl = tr("home.recs_apply_all_btn", count=len(auto_recs))
+            self.apply_all_recs_btn.set_label(lbl)
+            set_accessible(
+                self.apply_all_recs_btn,
+                tr("home.recs_apply_all_a11y"),
+                tr("home.recs_apply_all_desc"),
+            )
+            self.apply_all_recs_btn.show()
+        else:
+            self.apply_all_recs_btn.hide()
+
+        if len(recs) > 3:
+            more_lbl = tr("home.recs_more_btn", count=len(recs) - 3)
+            self.recs_more_btn.set_label(more_lbl)
+            set_accessible(
+                self.recs_more_btn,
+                tr("home.recs_more_a11y"),
+                tr("home.recs_more_desc"),
+            )
+            self.recs_more_btn.show()
+        else:
+            self.recs_more_btn.hide()
 
         clear_container(self.recs_box)
         if not recs:
@@ -308,40 +399,7 @@ class HomePage(Gtk.Box):
             return
 
         for rec in recs[:3]:
-            title, desc, btn_lbl, tone = self._describe_recommendation(rec, has_last_scan=has_last_scan)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            row.get_style_context().add_class("mintsec-rec-row")
-
-            ic_name = "dialog-warning-symbolic" if tone in ("crit", "warn") else "security-medium-symbolic"
-            row.pack_start(make_icon_chip(ic_name, pixel_size=16, tone=tone), False, False, 0)
-
-            info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-            t_lbl = Gtk.Label(label=title, xalign=0.0)
-            t_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            t_lbl.get_style_context().add_class("mintsec-subtitle")
-            d_lbl = Gtk.Label(label=desc, xalign=0.0)
-            d_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            d_lbl.get_style_context().add_class("mintsec-muted")
-            info.pack_start(t_lbl, False, False, 0)
-            info.pack_start(d_lbl, False, False, 0)
-            row.pack_start(info, True, True, 0)
-
-            act_btn = Gtk.Button(label=btn_lbl)
-            act_btn.get_style_context().add_class("mintsec-primary-cta")
-            act_btn.set_valign(Gtk.Align.CENTER)
-            set_accessible(act_btn, f"{btn_lbl}: {title}", desc)
-            act_btn.connect("clicked", lambda _b, r=rec: self._run_action(r["action"], r.get("target")))
-            row.pack_start(act_btn, False, False, 0)
-
-            if rec.get("ignorable"):
-                ign_btn = Gtk.Button(label=tr("home.rec_ignore_btn"))
-                ign_btn.get_style_context().add_class("mintsec-ghost-btn")
-                ign_btn.set_valign(Gtk.Align.CENTER)
-                set_accessible(ign_btn, tr("home.rec_ignore_a11y", title=title))
-                ign_btn.connect("clicked", lambda _b, rid=rec["rec_id"]: self._on_ignore_rec(rid))
-                row.pack_start(ign_btn, False, False, 0)
-
-            self.recs_box.pack_start(row, False, False, 0)
+            self.recs_box.pack_start(self._make_rec_row(rec, has_last_scan=has_last_scan), False, False, 0)
         self.recs_box.show_all()
 
     def _on_ignore_rec(self, rec_id: str) -> None:
@@ -429,7 +487,7 @@ class HomePage(Gtk.Box):
             cfg.language,
             tuple(cfg.ignored_recommendations),
             bool(last_scan_ts),
-            tuple((r["rec_id"], r.get("count"), r.get("until")) for r in recs),
+            tuple((r["rec_id"], r.get("count"), r.get("until"), r.get("action")) for r in recs),
         )
         if recs_sig != self._last_recs_sig:
             self._last_recs_sig = recs_sig
@@ -685,6 +743,116 @@ class HomePage(Gtk.Box):
                 self.in_use_card.pack_start(row, False, False, 0)
         self.in_use_card.show_all()
 
+    def _show_rec_error(self, msg: str) -> None:
+        ask_action_confirmation(
+            self.app_window,
+            title=tr("home.rec_apply_err_title"),
+            summary=msg,
+            actor=tr("win.menu"),
+            evidence=tr("home.rec_apply_err_evidence"),
+            confirm_label=tr("common.close"),
+            confirm_effect=tr("common.close_notice"),
+        )
+
+    def _on_apply_single_rec(self, rec: dict[str, Any], btn: Any = None) -> None:
+        action = str(rec.get("action", ""))
+        if not rec.get("auto_apply") or action == "quick_scan":
+            self._run_action(action, rec.get("target"))
+            return
+
+        def _done(_res: dict[str, Any]) -> None:
+            self.recs_feedback_lbl.set_text(tr("home.recs_applied_ok", count=1))
+            self.recs_feedback_lbl.show()
+            self._last_render_sig = None
+            self.app_window.refresh_all(force=True)
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.apply_recommendation(rec),
+            on_success=_done,
+            on_error=lambda exc: self._show_rec_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
+
+    def _on_show_more_recs(self, anchor_btn: Gtk.Button) -> None:
+        extra = self._last_recs_data[3:]
+        if not extra:
+            return
+        popover = Gtk.Popover()
+        popover.set_relative_to(anchor_btn)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_size_request(460, -1)
+        for rec in extra:
+            box.pack_start(
+                self._make_rec_row(rec, has_last_scan=self._last_has_scan, compact_pop=True),
+                False,
+                False,
+                0,
+            )
+        box.show_all()
+        popover.add(box)
+        popover.popup()
+
+    def _on_apply_all_recs(self, btn: Any = None, *, confirm: bool = True) -> None:
+        auto_recs = [r for r in self._last_recs_data if r.get("auto_apply")]
+        if not auto_recs:
+            return
+        if confirm:
+            bullets = "\n".join(
+                f"• {self._describe_recommendation(r, has_last_scan=self._last_has_scan)[0]}"
+                for r in auto_recs[:6]
+            )
+            if len(auto_recs) > 6:
+                bullets += f"\n• (+{len(auto_recs) - 6})"
+            ok = ask_action_confirmation(
+                self.app_window,
+                title=tr("home.recs_confirm_title"),
+                summary=tr("home.recs_confirm_summary", count=len(auto_recs), items=bullets),
+                actor="NodusGuard",
+                evidence=tr("home.recs_apply_all_desc"),
+                confirm_label=tr("home.recs_confirm_label"),
+                confirm_effect=tr("home.recs_confirm_effect"),
+            )
+            if not ok:
+                return
+        self.execute_apply_all_recommendations(auto_recs, busy_widget=btn)
+
+    def execute_apply_all_recommendations(
+        self,
+        recs: list[dict[str, Any]],
+        *,
+        busy_widget: Any = None,
+    ) -> None:
+        def _done(res: dict[str, Any]) -> None:
+            applied = list(res.get("applied") or [])
+            failed = list(res.get("failed") or [])
+            if failed:
+                err_txt = "; ".join(f"{f['rec_id']}: {f['error']}" for f in failed[:2])
+                self.recs_feedback_lbl.set_text(
+                    tr("home.recs_applied_partial", ok_cnt=len(applied), err_cnt=len(failed), err=err_txt)
+                )
+                self.recs_feedback_lbl.show()
+            elif applied:
+                self.recs_feedback_lbl.set_text(tr("home.recs_applied_ok", count=len(applied)))
+                self.recs_feedback_lbl.show()
+            self._last_render_sig = None
+            self.app_window.refresh_all(force=True)
+            if res.get("trigger_scan") == "quick":
+                self.app_window.navigate_to("scans", tab="scan")
+                self.app_window.scans_page.start_scan("quick")
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.apply_all_recommendations(recs=recs),
+            on_success=_done,
+            on_error=lambda exc: self._show_rec_error(format_error_message(exc)),
+            busy_widget=busy_widget if isinstance(busy_widget, Gtk.Widget) else None,
+        )
+
     def _run_action(self, action: str | None, target: Any = None) -> None:
         if action == "resume_protection":
             self.app_window.resume_protection()
@@ -703,6 +871,16 @@ class HomePage(Gtk.Box):
             self.app_window.scans_page.start_scan("quick")
         elif action == "update_db":
             self.app_window.trigger_db_update()
+        elif action in {
+            "auto_enable_antimalware",
+            "auto_enable_firewall",
+            "auto_enable_browsing",
+            "enable_auto_scan",
+        } or (action and action.startswith("allow_fw_preset:")):
+            self._on_apply_single_rec(
+                {"rec_id": action, "action": action, "target": target, "auto_apply": True},
+                self.primary_cta_btn,
+            )
         elif action == "open_recovery":
             self.app_window.navigate_to("recovery", tab="files")
         elif action == "open_protections":

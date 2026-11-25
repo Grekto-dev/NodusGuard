@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/Grekto-dev/NodusGuard/actions/workflows/ci.yml"><img src="https://github.com/Grekto-dev/NodusGuard/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/Grekto-dev/NodusGuard/releases/tag/v0.2.1"><img src="https://img.shields.io/github/v/release/Grekto-dev/NodusGuard?color=5E3DD6" alt="Release v0.2.1" /></a>
+  <a href="https://github.com/Grekto-dev/NodusGuard/releases/tag/v0.2.2"><img src="https://img.shields.io/github/v/release/Grekto-dev/NodusGuard?color=5E3DD6" alt="Release v0.2.2" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg" alt="License: GPL-3.0-or-later" /></a>
   <img src="https://img.shields.io/badge/Platform-Linux%20Mint%2022.x%20%7C%20Ubuntu%2024.04-87CF3E" alt="Linux Mint 22.x / Ubuntu 24.04" />
 </p>
@@ -27,6 +27,7 @@ Instead of inventing proprietary black-box daemons, NodusGuard orchestrates prov
 - **Bilingual live UI**: Starts in **English** by default and switches live to **Brazilian Portuguese (`pt_BR`)** from **Settings → General → Language** without restarting.
 - **Native flat aesthetic**: Uses server-side window decorations (SSD), adaptive light (lavender / neutral) and dark flat palettes, automatic high-contrast fallback (omitting custom CSS), full ATK keyboard/Orca accessibility, and **0 idle repaints**.
 - **Full scan control**: Pause and resume active antivirus scans (`SIGSTOP`/`SIGCONT` with pause-adjusted ETA) and choose an immediate post-scan power action (**Do nothing**, **Suspend PC**, or **Shut down PC**) with a configurable default in Settings.
+- **Smart recommendations & firewall app exceptions**: Apply recommended protections in one click from Home, and allow LAN/companion apps such as **KDE Connect** and **AudioRelay** (or custom ports and UFW profiles) safely scoped to your local network.
 - **Safe & reversible actions**: Deactivating any protection preserves existing user backups, quarantined files, and external firewall rules. Destructive operations require non-cached Polkit elevation.
 - **Modular Debian packaging**: Core UI and daemon are separate from the 7 optional protection packages and desktop file-manager integrations (Nemo, Caja, Thunar).
 
@@ -68,14 +69,14 @@ Download the release packages and `SHA256SUMS.txt` from [GitHub Releases](https:
 sha256sum -c SHA256SUMS.txt
 
 # 2. Install the core package (GTK 3 panel, D-Bus core, Rust session agent, C helpers)
-sudo apt install ./mint-security-suite-core_0.2.1_amd64.deb
+sudo apt install ./mint-security-suite-core_0.2.2_amd64.deb
 
 # 3. Install the protection modules and file manager integrations you want
 sudo apt install \
-  ./mint-security-suite-antimalware_0.2.1_all.deb \
-  ./mint-security-suite-firewall_0.2.1_all.deb \
-  ./mint-security-suite-backup_0.2.1_all.deb \
-  ./mint-security-suite-nemo_0.2.1_all.deb
+  ./mint-security-suite-antimalware_0.2.2_all.deb \
+  ./mint-security-suite-firewall_0.2.2_all.deb \
+  ./mint-security-suite-backup_0.2.2_all.deb \
+  ./mint-security-suite-nemo_0.2.2_all.deb
 ```
 
 Then launch **NodusGuard** from your application menu or run `mint-security-suite` in a terminal.
@@ -120,7 +121,7 @@ make deb
 
 - [Architecture Overview](docs/architecture.md)
 - [Homologation Report (H1–H8)](docs/homologation-report.md)
-- [Release Manifest (`0.2.1`)](docs/release-manifest.json)
+- [Release Manifest (`0.2.2`)](docs/release-manifest.json)
 - [Security Policy](SECURITY.md)
 - [Contributing Guide](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

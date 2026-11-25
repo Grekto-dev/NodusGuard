@@ -144,3 +144,109 @@ class SystemModuleClient:
                 if _disallow_unprivileged_fallback(local_service):
                     raise RuntimeError(_DBUS_SERVICE_UNAVAILABLE_MSG) from exc
         return local_service.update_signatures()
+
+    def allow_firewall_preset(
+        self,
+        preset_id: str,
+        local_service: Any,
+        *,
+        lan_only: bool | None = None,
+        source_cidr: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"preset_id": str(preset_id)}
+        if lan_only is not None:
+            payload["lan_only"] = bool(lan_only)
+        if source_cidr is not None:
+            payload["source_cidr"] = str(source_cidr)
+        if is_system_bus_mode():
+            try:
+                return self.call_dbus(
+                    "firewall",
+                    "AllowAppPreset",
+                    json.dumps(payload),
+                    timeout=180.0,
+                )
+            except Exception as exc:
+                if not _is_bus_unavailable_error(exc):
+                    raise
+                if _disallow_unprivileged_fallback(local_service):
+                    raise RuntimeError(_DBUS_SERVICE_UNAVAILABLE_MSG) from exc
+        return local_service.allow_app_preset(
+            preset_id,
+            lan_only=lan_only,
+            source_cidr=source_cidr,
+        )
+
+    def revoke_firewall_preset(self, preset_id: str, local_service: Any) -> dict[str, Any]:
+        if is_system_bus_mode():
+            try:
+                return self.call_dbus(
+                    "firewall",
+                    "RevokeAppPreset",
+                    str(preset_id),
+                    timeout=180.0,
+                )
+            except Exception as exc:
+                if not _is_bus_unavailable_error(exc):
+                    raise
+                if _disallow_unprivileged_fallback(local_service):
+                    raise RuntimeError(_DBUS_SERVICE_UNAVAILABLE_MSG) from exc
+        return local_service.revoke_app_preset(preset_id)
+
+    def allow_firewall_custom_ports(
+        self,
+        local_service: Any,
+        *,
+        app_name: str,
+        ports: list[str],
+        direction: str = "in",
+        protocol: str = "both",
+        lan_only: bool = True,
+        source_cidr: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "app_name": str(app_name),
+            "ports": [str(p) for p in ports],
+            "direction": str(direction),
+            "protocol": str(protocol),
+            "lan_only": bool(lan_only),
+        }
+        if source_cidr is not None:
+            payload["source_cidr"] = str(source_cidr)
+        if is_system_bus_mode():
+            try:
+                return self.call_dbus(
+                    "firewall",
+                    "AllowCustomPorts",
+                    json.dumps(payload),
+                    timeout=180.0,
+                )
+            except Exception as exc:
+                if not _is_bus_unavailable_error(exc):
+                    raise
+                if _disallow_unprivileged_fallback(local_service):
+                    raise RuntimeError(_DBUS_SERVICE_UNAVAILABLE_MSG) from exc
+        return local_service.allow_custom_app_ports(
+            app_name=app_name,
+            ports=ports,
+            direction=direction,
+            protocol=protocol,
+            lan_only=lan_only,
+            source_cidr=source_cidr,
+        )
+
+    def allow_firewall_ufw_profile(self, profile_name: str, local_service: Any) -> dict[str, Any]:
+        if is_system_bus_mode():
+            try:
+                return self.call_dbus(
+                    "firewall",
+                    "AllowUfwProfile",
+                    str(profile_name),
+                    timeout=180.0,
+                )
+            except Exception as exc:
+                if not _is_bus_unavailable_error(exc):
+                    raise
+                if _disallow_unprivileged_fallback(local_service):
+                    raise RuntimeError(_DBUS_SERVICE_UNAVAILABLE_MSG) from exc
+        return local_service.allow_ufw_profile(profile_name)

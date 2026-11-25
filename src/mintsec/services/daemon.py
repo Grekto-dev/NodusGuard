@@ -236,6 +236,134 @@ class ModuleDBusService:
                 except Exception as exc:
                     _raise_dbus_error(exc)
 
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="s",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def AllowAppPreset(inner_self, payload_json: str, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "firewall":
+                        raise ValueError("AllowAppPreset só é suportado pelo módulo firewall.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.firewall.configure",
+                        sender,
+                    )
+                    payload = json.loads(payload_json or "{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("Parâmetro payload_json deve ser um objeto JSON.")
+                    allowed = {"preset_id", "lan_only", "source_cidr"}
+                    unknown = set(payload.keys()) - allowed
+                    if unknown:
+                        raise ValueError(f"Opções não permitidas em AllowAppPreset: {', '.join(sorted(unknown))}")
+                    res = service.allow_app_preset(
+                        str(payload.get("preset_id", "")),
+                        lan_only=payload.get("lan_only"),
+                        source_cidr=payload.get("source_cidr"),
+                        caller_uid=uid,
+                        preauthorized=True,
+                    )
+                    return json.dumps(res, ensure_ascii=False)
+                except Exception as exc:
+                    _raise_dbus_error(exc)
+
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="s",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def RevokeAppPreset(inner_self, preset_id: str, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "firewall":
+                        raise ValueError("RevokeAppPreset só é suportado pelo módulo firewall.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.firewall.configure",
+                        sender,
+                    )
+                    res = service.revoke_app_preset(
+                        str(preset_id or "").strip(),
+                        caller_uid=uid,
+                        preauthorized=True,
+                    )
+                    return json.dumps(res, ensure_ascii=False)
+                except Exception as exc:
+                    _raise_dbus_error(exc)
+
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="s",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def AllowCustomPorts(inner_self, payload_json: str, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "firewall":
+                        raise ValueError("AllowCustomPorts só é suportado pelo módulo firewall.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.firewall.configure",
+                        sender,
+                    )
+                    payload = json.loads(payload_json or "{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("Parâmetro payload_json deve ser um objeto JSON.")
+                    allowed = {"app_name", "ports", "direction", "protocol", "lan_only", "source_cidr"}
+                    unknown = set(payload.keys()) - allowed
+                    if unknown:
+                        raise ValueError(f"Opções não permitidas em AllowCustomPorts: {', '.join(sorted(unknown))}")
+                    raw_ports = payload.get("ports")
+                    if not isinstance(raw_ports, list):
+                        raise ValueError("Parâmetro ports deve ser uma lista.")
+                    res = service.allow_custom_app_ports(
+                        app_name=str(payload.get("app_name", "")),
+                        ports=[str(p) for p in raw_ports],
+                        direction=str(payload.get("direction", "in")),
+                        protocol=str(payload.get("protocol", "both")),
+                        lan_only=bool(payload.get("lan_only", True)),
+                        source_cidr=payload.get("source_cidr"),
+                        caller_uid=uid,
+                        preauthorized=True,
+                    )
+                    return json.dumps(res, ensure_ascii=False)
+                except Exception as exc:
+                    _raise_dbus_error(exc)
+
+            @dbus.service.method(
+                manifest.dbus_bus_name,
+                in_signature="s",
+                out_signature="s",
+                sender_keyword="sender",
+            )
+            def AllowUfwProfile(inner_self, profile_name: str, sender: str | None = None) -> str:
+                inner_self._touch()
+                try:
+                    if module_id != "firewall":
+                        raise ValueError("AllowUfwProfile só é suportado pelo módulo firewall.")
+                    uid = _authorize_dbus_call(
+                        authorizer,
+                        bus_obj,
+                        "org.mintsecurity.firewall.configure",
+                        sender,
+                    )
+                    res = service.allow_ufw_profile(
+                        str(profile_name or "").strip(),
+                        caller_uid=uid,
+                        preauthorized=True,
+                    )
+                    return json.dumps(res, ensure_ascii=False)
+                except Exception as exc:
+                    _raise_dbus_error(exc)
+
         self._exported = _Exported()
         self._reset_idle_timer()
 

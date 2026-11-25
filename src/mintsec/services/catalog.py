@@ -21,6 +21,13 @@ from mintsec.contracts import (
     load_manifests,
 )
 from mintsec.dbus_client import SystemModuleClient, is_system_bus_mode
+from mintsec.firewall_apps import (
+    PRESETS_BY_ID,
+    detect_app_presets,
+    detect_listening_apps,
+    detect_local_lan_cidr,
+    list_ufw_app_profiles,
+)
 from mintsec.formatting import format_confirmed_at, now_iso
 from mintsec.history import HistoryStore
 from mintsec.incident import IncidentManager
@@ -113,6 +120,8 @@ class SuiteController:
         post_scan_executor: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._post_scan_executor = post_scan_executor
+        self._extra_fw_app_dirs: tuple[Path, ...] = ()
+        self._fw_profiles_dir: Path | None = None
         self.manifests: dict[str, ModuleManifest] = load_manifests(manifests_dir)
         self.config_store = config_store or ConfigStore()
         cfg = self.config_store.load()
@@ -221,6 +230,49 @@ class SuiteController:
     def _use_system_bus(self) -> bool:
         return self.is_live_host_runner and is_system_bus_mode()
 
+    def _enrich_firewall_status(self, status: ModuleStatus) -> ModuleStatus:
+        """Anexa presets de apps, escutas ativas, perfis UFW e faixa LAN ao status do firewall."""
+        details = dict(status.details)
+        listening = detect_listening_apps(self.runner)
+        lan_cidr = detect_local_lan_cidr(self.runner)
+        profiles = (
+            list_ufw_app_profiles(self._fw_profiles_dir)
+            if self._fw_profiles_dir is not None
+            else list_ufw_app_profiles()
+        )
+        allowed_presets = {str(p) for p in (details.get("allowed_presets") or []) if p}
+        for rule in details.get("managed_rules") or details.get("rules") or []:
+            pid = str(rule.get("preset_id") or "")
+            if pid:
+                allowed_presets.add(pid)
+        presets = detect_app_presets(
+            self.runner,
+            extra_app_dirs=self._extra_fw_app_dirs,
+            listening_apps=listening,
+        )
+        for preset in presets:
+            preset["allowed"] = preset["preset_id"] in allowed_presets
+        details["app_presets"] = presets
+        details["listening_apps"] = listening
+        details["ufw_profiles"] = profiles
+        details["lan_cidr"] = lan_cidr
+        details["allowed_presets"] = sorted(allowed_presets)
+        return ModuleStatus(
+            module_id=status.module_id or "firewall",
+            display_name=status.display_name or self.manifests["firewall"].display_name,
+            state=status.state,
+            installed_version=status.installed_version,
+            package_origin=status.package_origin,
+            mode_summary=status.mode_summary,
+            last_confirmed_at=status.last_confirmed_at,
+            evidence=status.evidence,
+            degraded_reason=status.degraded_reason,
+            needs_setup=status.needs_setup,
+            phase=status.phase,
+            experimental=status.experimental,
+            details=details,
+        )
+
     def _overlay_firewall_user_state(self, status: ModuleStatus) -> ModuleStatus:
         """Mescla preferências e estado do usuário (saída/OpenSnitch) no status vindo do daemon."""
         cfg = self.config_store.load()
@@ -237,7 +289,7 @@ class SuiteController:
                 else "Saída em monitoramento"
             )
             mode_summary = f"Firewall de entrada ativo · {out_label}"
-        return ModuleStatus(
+        merged = ModuleStatus(
             module_id=status.module_id or "firewall",
             display_name=status.display_name or self.manifests["firewall"].display_name,
             state=status.state,
@@ -252,12 +304,16 @@ class SuiteController:
             experimental=status.experimental,
             details=details,
         )
+        return self._enrich_firewall_status(merged)
 
     def _query_module(self, module_id: str) -> ModuleStatus:
         if module_id == "firewall" and self._use_system_bus():
             data = self.dbus_client.query_status("firewall", self.firewall)
             return self._overlay_firewall_user_state(ModuleStatus.from_dict(data))
-        return self.services[module_id].query_status()
+        st = self.services[module_id].query_status()
+        if module_id == "firewall":
+            return self._enrich_firewall_status(st)
+        return st
 
     def _sync_user_module_flag(self, module_id: str, enabled: bool) -> None:
         svc = self.services.get(module_id)
@@ -360,6 +416,165 @@ class SuiteController:
         ok = bool(self.firewall.revoke_rule(rule_id))
         self.invalidate_cache("firewall")
         return ok
+
+    def allow_firewall_preset(
+        self,
+        preset_id: str,
+        *,
+        lan_only: bool | None = None,
+        source_cidr: str | None = None,
+    ) -> dict[str, Any]:
+        """Libera um aplicativo curado (KDE Connect, AudioRelay etc.) pelo serviço de firewall."""
+        if self._use_system_bus():
+            res = self.dbus_client.allow_firewall_preset(
+                preset_id,
+                self.firewall,
+                lan_only=lan_only,
+                source_cidr=source_cidr,
+            )
+            preset = PRESETS_BY_ID.get(preset_id)
+            app_label = preset.name if preset else preset_id
+            self.history_store.record(
+                module_id="firewall",
+                action=f"Aplicativo liberado no firewall: {app_label}",
+                reason=f"Exceção aplicada ({res.get('source_cidr') or 'qualquer origem'}).",
+                confirmation_state="confirmed",
+                actor="user",
+                app_name=app_label,
+                reversible=True,
+                revert_action=f"revoke_preset:{preset_id}",
+            )
+            if isinstance(res.get("status"), dict):
+                res["status"] = self._overlay_firewall_user_state(
+                    ModuleStatus.from_dict(res["status"])
+                ).to_dict()
+            self.invalidate_cache("firewall")
+            return res
+
+        res = self.firewall.allow_app_preset(
+            preset_id,
+            lan_only=lan_only,
+            source_cidr=source_cidr,
+        )
+        if isinstance(res.get("status"), dict):
+            res["status"] = self._enrich_firewall_status(
+                ModuleStatus.from_dict(res["status"])
+            ).to_dict()
+        self.invalidate_cache("firewall")
+        return res
+
+    def revoke_firewall_preset(self, preset_id: str) -> dict[str, Any]:
+        """Remove todas as regras gerenciadas de um aplicativo predefinido."""
+        if self._use_system_bus():
+            res = self.dbus_client.revoke_firewall_preset(preset_id, self.firewall)
+            preset = PRESETS_BY_ID.get(preset_id)
+            app_label = preset.name if preset else preset_id
+            if res.get("removed"):
+                self.history_store.record(
+                    module_id="firewall",
+                    action=f"Permissão de firewall removida: {app_label}",
+                    reason=f"{res.get('removed', 0)} regra(s) removida(s).",
+                    confirmation_state="confirmed",
+                    actor="user",
+                    app_name=app_label,
+                )
+            if isinstance(res.get("status"), dict):
+                res["status"] = self._overlay_firewall_user_state(
+                    ModuleStatus.from_dict(res["status"])
+                ).to_dict()
+            self.invalidate_cache("firewall")
+            return res
+
+        res = self.firewall.revoke_app_preset(preset_id)
+        if isinstance(res.get("status"), dict):
+            res["status"] = self._enrich_firewall_status(
+                ModuleStatus.from_dict(res["status"])
+            ).to_dict()
+        self.invalidate_cache("firewall")
+        return res
+
+    def allow_firewall_custom_ports(
+        self,
+        *,
+        app_name: str,
+        ports: list[str],
+        direction: str = "in",
+        protocol: str = "both",
+        lan_only: bool = True,
+        source_cidr: str | None = None,
+    ) -> dict[str, Any]:
+        """Libera portas ou faixas personalizadas para um aplicativo no firewall."""
+        if self._use_system_bus():
+            res = self.dbus_client.allow_firewall_custom_ports(
+                self.firewall,
+                app_name=app_name,
+                ports=ports,
+                direction=direction,
+                protocol=protocol,
+                lan_only=lan_only,
+                source_cidr=source_cidr,
+            )
+            self.history_store.record(
+                module_id="firewall",
+                action=f"Porta(s) liberada(s) para {app_name}",
+                reason=f"Portas {', '.join(ports)} ({res.get('source_cidr') or 'qualquer origem'}).",
+                confirmation_state="confirmed",
+                actor="user",
+                app_name=app_name,
+                reversible=True,
+            )
+            if isinstance(res.get("status"), dict):
+                res["status"] = self._overlay_firewall_user_state(
+                    ModuleStatus.from_dict(res["status"])
+                ).to_dict()
+            self.invalidate_cache("firewall")
+            return res
+
+        res = self.firewall.allow_custom_app_ports(
+            app_name=app_name,
+            ports=ports,
+            direction=direction,
+            protocol=protocol,
+            lan_only=lan_only,
+            source_cidr=source_cidr,
+        )
+        if isinstance(res.get("status"), dict):
+            res["status"] = self._enrich_firewall_status(
+                ModuleStatus.from_dict(res["status"])
+            ).to_dict()
+        self.invalidate_cache("firewall")
+        return res
+
+    def allow_firewall_ufw_profile(self, profile_name: str) -> dict[str, Any]:
+        """Libera perfil oficial do UFW (/etc/ufw/applications.d)."""
+        if self._use_system_bus():
+            res = self.dbus_client.allow_firewall_ufw_profile(profile_name, self.firewall)
+            self.history_store.record(
+                module_id="firewall",
+                action=f"Perfil UFW liberado: {profile_name}",
+                reason="Perfil de aplicativo permitido no firewall.",
+                confirmation_state="confirmed",
+                actor="user",
+                app_name=profile_name,
+                reversible=True,
+            )
+            if isinstance(res.get("status"), dict):
+                res["status"] = self._overlay_firewall_user_state(
+                    ModuleStatus.from_dict(res["status"])
+                ).to_dict()
+            self.invalidate_cache("firewall")
+            return res
+
+        res = self.firewall.allow_ufw_profile(
+            profile_name,
+            profiles_dir=self._fw_profiles_dir,
+        )
+        if isinstance(res.get("status"), dict):
+            res["status"] = self._enrich_firewall_status(
+                ModuleStatus.from_dict(res["status"])
+            ).to_dict()
+        self.invalidate_cache("firewall")
+        return res
 
     def update_antimalware_signatures(self) -> dict[str, Any]:
         """Atualiza assinaturas ClamAV com FreshClam via serviço root quando instalado."""
@@ -894,6 +1109,7 @@ class SuiteController:
                     "action": "resume_protection",
                     "target": cfg.protection_pause_mode,
                     "until": cfg.protection_paused_until,
+                    "auto_apply": True,
                 }
             )
 
@@ -907,6 +1123,7 @@ class SuiteController:
                     "action": "review_pending",
                     "target": paused_apps[0].pending_id,
                     "app_name": paused_apps[0].app_name or "",
+                    "auto_apply": False,
                 }
             )
         elif open_pending:
@@ -917,6 +1134,7 @@ class SuiteController:
                     "ignorable": False,
                     "action": "open_notifications",
                     "count": len(open_pending),
+                    "auto_apply": False,
                 }
             )
 
@@ -931,6 +1149,7 @@ class SuiteController:
                         "ignorable": True,
                         "action": "update_db",
                         "stale": bool(sig.get("available")),
+                        "auto_apply": True,
                     }
                 )
             if am_st.state == ModuleState.VERIFICACAO_INCOMPLETA:
@@ -939,7 +1158,8 @@ class SuiteController:
                         "rec_id": "scan_incomplete",
                         "severity": "warning",
                         "ignorable": True,
-                        "action": "open_scans",
+                        "action": "quick_scan",
+                        "auto_apply": True,
                     }
                 )
             if am_st.state == ModuleState.DESATIVADO:
@@ -948,22 +1168,67 @@ class SuiteController:
                         "rec_id": "enable_antimalware",
                         "severity": "warning",
                         "ignorable": True,
-                        "action": "enable_module:antimalware",
+                        "action": "auto_enable_antimalware",
+                        "auto_apply": True,
                     }
                 )
 
         fw_st = statuses.get("firewall")
-        if fw_st is not None and fw_st.state != ModuleState.AUSENTE and fw_st.state == ModuleState.DESATIVADO:
+        if fw_st is not None and fw_st.state != ModuleState.AUSENTE:
+            if fw_st.state == ModuleState.DESATIVADO:
+                recs.append(
+                    {
+                        "rec_id": "enable_firewall",
+                        "severity": "warning",
+                        "ignorable": True,
+                        "action": "auto_enable_firewall",
+                        "auto_apply": True,
+                    }
+                )
+            elif fw_st.state == ModuleState.ATIVO:
+                allowed_set = set(fw_st.details.get("allowed_presets") or [])
+                for preset in fw_st.details.get("app_presets") or []:
+                    if (
+                        preset.get("detected")
+                        and preset.get("auto_allow_on_enable")
+                        and preset.get("preset_id") not in allowed_set
+                    ):
+                        pid = str(preset["preset_id"])
+                        recs.append(
+                            {
+                                "rec_id": f"allow_fw_app:{pid}",
+                                "severity": "info",
+                                "ignorable": True,
+                                "action": f"allow_fw_preset:{pid}",
+                                "preset_id": pid,
+                                "app_name": str(preset.get("name") or pid),
+                                "auto_apply": True,
+                            }
+                        )
+
+        br_st = statuses.get("browsing")
+        if br_st is not None and br_st.state == ModuleState.DESATIVADO:
             recs.append(
                 {
-                    "rec_id": "enable_firewall",
-                    "severity": "warning",
+                    "rec_id": "enable_browsing",
+                    "severity": "info",
                     "ignorable": True,
-                    "action": "open_module:firewall",
+                    "action": "auto_enable_browsing",
+                    "auto_apply": True,
                 }
             )
 
         if am_st is not None and am_st.state != ModuleState.AUSENTE:
+            if not cfg.auto_quick_scan_enabled:
+                recs.append(
+                    {
+                        "rec_id": "enable_auto_scan",
+                        "severity": "info",
+                        "ignorable": True,
+                        "action": "enable_auto_scan",
+                        "auto_apply": True,
+                    }
+                )
             last_scan = am_st.details.get("last_scan") or {}
             scan_old = not last_scan.get("finished_at")
             if last_scan.get("finished_at"):
@@ -980,6 +1245,7 @@ class SuiteController:
                         "severity": "info",
                         "ignorable": True,
                         "action": "quick_scan",
+                        "auto_apply": True,
                     }
                 )
 
@@ -991,10 +1257,128 @@ class SuiteController:
                     "severity": "info",
                     "ignorable": True,
                     "action": "open_recovery",
+                    "auto_apply": False,
                 }
             )
 
         return [r for r in recs if not (r["ignorable"] and r["rec_id"] in ignored)]
+
+    def _auto_allow_detected_lan_apps(self) -> list[str]:
+        """Libera aplicativos LAN detectados marcados com auto_allow_on_enable ao ativar o firewall."""
+        allowed_names: list[str] = []
+        presets = detect_app_presets(self.runner, extra_app_dirs=self._extra_fw_app_dirs)
+        for preset in presets:
+            if preset.get("detected") and preset.get("auto_allow_on_enable"):
+                self.allow_firewall_preset(str(preset["preset_id"]))
+                allowed_names.append(str(preset["name"]))
+        return allowed_names
+
+    def apply_recommendation(
+        self,
+        rec: dict[str, Any],
+        *,
+        run_scan_sync: bool = False,
+    ) -> dict[str, Any]:
+        """Aplica automaticamente uma recomendação acionável pelo app."""
+        rid = str(rec.get("rec_id", ""))
+        action = str(rec.get("action", ""))
+        if action == "resume_protection":
+            self.resume_protection()
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True}
+        if action == "update_db":
+            res = self.update_antimalware_signatures()
+            if not res.get("ok"):
+                err = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
+                raise RuntimeError(err)
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True}
+        if action in {"auto_enable_antimalware", "enable_module:antimalware"}:
+            self.enable_module("antimalware")
+            self.ensure_default_automation()
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True}
+        if action in {"auto_enable_firewall", "enable_module:firewall"}:
+            self.enable_module("firewall", apply_essential_rules=True)
+            allowed_apps = self._auto_allow_detected_lan_apps()
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True, "allowed_apps": allowed_apps}
+        if action == "auto_enable_browsing":
+            self.enable_module("browsing")
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True}
+        if action.startswith("allow_fw_preset:"):
+            pid = action.split(":", 1)[1]
+            self.allow_firewall_preset(pid)
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True, "preset_id": pid}
+        if action == "enable_auto_scan":
+            self.config_store.update(auto_quick_scan_enabled=True)
+            self.ensure_default_automation()
+            self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True}
+        if action == "quick_scan":
+            if run_scan_sync:
+                self.antimalware.run_scan(scope="quick")
+                self.invalidate_cache()
+            return {"ok": True, "rec_id": rid, "auto_applied": True, "trigger_scan": "quick"}
+        return {
+            "ok": False,
+            "rec_id": rid,
+            "auto_applied": False,
+            "requires_manual": True,
+            "action": action,
+            "target": rec.get("target"),
+        }
+
+    def apply_all_recommendations(
+        self,
+        *,
+        statuses: dict[str, ModuleStatus] | None = None,
+        recs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Aplica em ordem segura todas as recomendações automáticas pendentes."""
+        target_recs = list(recs) if recs is not None else self.get_protection_recommendations(statuses=statuses)
+        ordered = [r for r in target_recs if r.get("action") != "quick_scan"] + [
+            r for r in target_recs if r.get("action") == "quick_scan"
+        ]
+        applied: list[str] = []
+        failed: list[dict[str, str]] = []
+        skipped_manual: list[str] = []
+        trigger_scan: str | None = None
+
+        for rec in ordered:
+            rid = str(rec.get("rec_id", ""))
+            if not rec.get("auto_apply", False):
+                skipped_manual.append(rid)
+                continue
+            try:
+                res = self.apply_recommendation(rec, run_scan_sync=False)
+                if res.get("auto_applied"):
+                    applied.append(rid)
+                    if res.get("trigger_scan") and trigger_scan is None:
+                        trigger_scan = str(res["trigger_scan"])
+                else:
+                    skipped_manual.append(rid)
+            except Exception as exc:  # noqa: BLE001
+                failed.append({"rec_id": rid, "error": str(exc)})
+
+        if applied:
+            self.history_store.record(
+                module_id="suite",
+                action="Recomendações aplicadas automaticamente",
+                reason=f"Aplicadas: {', '.join(applied)}.",
+                confirmation_state="confirmed" if not failed else "incomplete",
+                actor="user",
+            )
+        self.invalidate_cache()
+        return {
+            "ok": len(failed) == 0,
+            "applied": applied,
+            "failed": failed,
+            "skipped_manual": skipped_manual,
+            "trigger_scan": trigger_scan,
+        }
 
     def get_overall_health(
         self,

@@ -81,7 +81,7 @@ def main() -> int:
         print(f"[{key}] concluído: {res['status']}", flush=True)
 
     release_manifest = {
-        "suite_version": "0.2.1",
+        "suite_version": "0.2.2",
         "target_base": "Linux Mint 22.3 (Ubuntu 24.04)",
         "kernel": platform.release(),
         "approved_features": [

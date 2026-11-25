@@ -5,6 +5,15 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-11-25
+
+### Added
+- **Firewall App Exceptions (`Allow apps` tab)**:
+  - Added curated presets for popular companion and LAN tools — including **KDE Connect** (`1714:1764` TCP/UDP) and **AudioRelay** (`59100/tcp`, `59200/udp`), plus Warpinator, LocalSend, Tailscale, Syncthing, Steam Remote Play, Sunshine/Moonlight, Samba, Spotify Connect, SSH, and CUPS — with local-subnet LAN scoping (`192.168.0.0/16`, `10.0.0.0/8`, etc.).
+  - Added live non-loopback network listener discovery (`ss`), safe `/etc/ufw/applications.d` UFW profile listing & allow controls, custom app/port/protocol/direction form, automatic LAN app allowance on firewall activation, and Polkit-guarded D-Bus methods (`AllowAppPreset`, `RevokeAppPreset`, `AllowCustomPorts`, `AllowUfwProfile`).
+- **One-Click Automatic Protection Recommendations**:
+  - Upgraded **Home** recommendations with **Apply all automatically** (`apply_recommendation` / `apply_all_recommendations`) to enable protections, update signatures, schedule automatic quick scans, and allow detected LAN companion apps in one click.
+
 ## [0.2.1] - 2026-11-22
 
 ### Added

@@ -14,7 +14,7 @@ from mintsec.formatting import format_error_message, format_local_datetime  # no
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import get_language, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
     clear_container,
@@ -35,6 +35,15 @@ class ModuleDetailPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.app_window = app_window
         self.current_module_id: str = "antimalware"
+        self._fw_active_tab: int | None = None
+        self._fw_search_text: str = ""
+        self._fw_lan_only: bool = True
+        self._fw_auto_allow_on_enable: bool = True
+        self.fw_search_entry: Gtk.SearchEntry | None = None
+        self.fw_presets_list_box: Gtk.Box | None = None
+        self.fw_custom_name_entry: Gtk.Entry | None = None
+        self.fw_custom_ports_entry: Gtk.Entry | None = None
+        self.fw_notebook: Gtk.Notebook | None = None
 
         top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._back_btn = Gtk.Button(label="")
@@ -53,6 +62,7 @@ class ModuleDetailPage(Gtk.Box):
 
     def load_module(self, module_id: str, statuses: dict[str, Any] | None = None) -> None:
         self.current_module_id = module_id
+        self._fw_active_tab = None
         self.refresh(statuses=statuses)
 
     def refresh(self, statuses: dict[str, Any] | None = None) -> None:
@@ -71,7 +81,7 @@ class ModuleDetailPage(Gtk.Box):
             else:
                 st = None
         else:
-            st = controller.services[mod_id].query_status()
+            st = controller.get_module_status(mod_id)
 
         if st is None:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -239,7 +249,10 @@ class ModuleDetailPage(Gtk.Box):
     def _build_firewall_section(self, st: Any) -> None:
         nb = Gtk.Notebook()
         nb.get_style_context().add_class("mintsec-tabs")
+        self.fw_notebook = nb
+        lan_cidr = str(st.details.get("lan_cidr") or "192.168.0.0/16")
 
+        # Aba 1: Entrada
         in_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         in_box.set_margin_top(6)
         in_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -258,6 +271,15 @@ class ModuleDetailPage(Gtk.Box):
             rl.get_style_context().add_class("mintsec-muted")
             in_card.pack_start(rl, False, False, 0)
 
+        auto_allow_chk = Gtk.CheckButton(label=tr("detail.fw_auto_allow_chk"))
+        auto_allow_chk.set_active(self._fw_auto_allow_on_enable)
+        set_accessible(auto_allow_chk, tr("detail.fw_auto_allow_chk"), tr("detail.fw_auto_allow_desc"))
+        auto_allow_chk.connect(
+            "toggled",
+            lambda chk: setattr(self, "_fw_auto_allow_on_enable", bool(chk.get_active())),
+        )
+        in_card.pack_start(auto_allow_chk, False, False, 0)
+
         act_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         act_lbl = tr("detail.fw_enable_btn")
         act_btn = Gtk.Button(label=act_lbl)
@@ -269,6 +291,293 @@ class ModuleDetailPage(Gtk.Box):
         in_box.pack_start(in_card, False, False, 0)
         nb.append_page(in_box, Gtk.Label(label=tr("detail.fw_tab_in")))
 
+        # Aba 2: Permitir aplicativos (KDE Connect, AudioRelay, perfis e portas personalizadas)
+        apps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        apps_box.set_margin_top(6)
+
+        presets_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        presets_card.get_style_context().add_class("mintsec-card")
+
+        p_title = Gtk.Label(label=tr("detail.fw_presets_title"), xalign=0.0)
+        p_title.get_style_context().add_class("mintsec-section-title")
+        p_sub = Gtk.Label(label=tr("detail.fw_presets_sub"), xalign=0.0)
+        p_sub.set_line_wrap(True)
+        p_sub.get_style_context().add_class("mintsec-muted")
+        presets_card.pack_start(p_title, False, False, 0)
+        presets_card.pack_start(p_sub, False, False, 0)
+
+        ctrl_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        search_entry = Gtk.SearchEntry()
+        search_entry.set_placeholder_text(tr("detail.fw_apps_search_ph"))
+        search_entry.set_text(self._fw_search_text)
+        set_accessible(
+            search_entry,
+            tr("detail.fw_apps_search_a11y"),
+            tr("detail.fw_apps_search_desc"),
+        )
+        self.fw_search_entry = search_entry
+
+        lan_chk = Gtk.CheckButton(label=tr("detail.fw_lan_chk", cidr=lan_cidr))
+        lan_chk.set_active(self._fw_lan_only)
+        set_accessible(lan_chk, tr("detail.fw_lan_chk", cidr=lan_cidr), tr("detail.fw_lan_chk_desc"))
+        lan_chk.connect(
+            "toggled",
+            lambda chk: setattr(self, "_fw_lan_only", bool(chk.get_active())),
+        )
+        ctrl_bar.pack_start(search_entry, True, True, 0)
+        ctrl_bar.pack_start(lan_chk, False, False, 0)
+        presets_card.pack_start(ctrl_bar, False, False, 0)
+
+        presets_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.fw_presets_list_box = presets_list
+        presets_data = list(st.details.get("app_presets") or [])
+
+        def _populate_presets(query_txt: str) -> None:
+            clear_container(presets_list)
+            q = query_txt.strip().lower()
+            is_pt = get_language() == "pt_BR"
+            matched = []
+            for p in presets_data:
+                summary = p.get("summary_pt") if is_pt else p.get("summary_en")
+                hay = f"{p.get('name', '')} {summary or ''} {' '.join(p.get('ports') or [])}".lower()
+                if not q or q in hay:
+                    matched.append(p)
+            if not matched:
+                empty_lbl = Gtk.Label(label=tr("detail.fw_apps_no_match"), xalign=0.0)
+                empty_lbl.set_line_wrap(True)
+                empty_lbl.get_style_context().add_class("mintsec-muted")
+                presets_list.pack_start(empty_lbl, False, False, 0)
+                presets_list.show_all()
+                return
+
+            for idx, preset in enumerate(matched):
+                if idx > 0:
+                    sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                    sep.get_style_context().add_class("mintsec-divider")
+                    presets_list.pack_start(sep, False, False, 0)
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                row.set_margin_top(4)
+                row.set_margin_bottom(4)
+
+                info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                n_lbl = Gtk.Label(label=str(preset.get("name", "")), xalign=0.0)
+                n_lbl.get_style_context().add_class("mintsec-subtitle")
+                title_row.pack_start(n_lbl, False, False, 0)
+                if preset.get("running"):
+                    title_row.pack_start(make_pill(tr("detail.fw_badge_running"), tone="accent"), False, False, 0)
+                elif preset.get("installed"):
+                    title_row.pack_start(make_pill(tr("detail.fw_badge_installed"), tone="neutral"), False, False, 0)
+                if preset.get("allowed"):
+                    title_row.pack_start(make_pill(tr("detail.fw_badge_allowed"), tone="ok"), False, False, 0)
+                info.pack_start(title_row, False, False, 0)
+
+                summary_txt = str((preset.get("summary_pt") if is_pt else preset.get("summary_en")) or "")
+                s_lbl = Gtk.Label(label=summary_txt, xalign=0.0)
+                s_lbl.set_line_wrap(True)
+                s_lbl.get_style_context().add_class("mintsec-muted")
+                info.pack_start(s_lbl, False, False, 0)
+
+                ports_txt = tr("detail.fw_ports_line", ports=", ".join(preset.get("ports") or []))
+                pt_lbl = Gtk.Label(label=ports_txt, xalign=0.0)
+                pt_lbl.get_style_context().add_class("mintsec-muted")
+                info.pack_start(pt_lbl, False, False, 0)
+                row.pack_start(info, True, True, 0)
+
+                pid = str(preset["preset_id"])
+                pname = str(preset.get("name", pid))
+                if preset.get("allowed"):
+                    btn = Gtk.Button(label=tr("detail.fw_remove_app_btn"))
+                    btn.set_valign(Gtk.Align.CENTER)
+                    set_accessible(
+                        btn,
+                        tr("detail.fw_remove_app_a11y", name=pname),
+                        tr("detail.fw_remove_app_desc", name=pname),
+                    )
+                    btn.connect("clicked", lambda b, p_id=pid: self._on_revoke_fw_preset(p_id, b))
+                else:
+                    btn = Gtk.Button(label=tr("detail.fw_allow_btn"))
+                    btn.set_valign(Gtk.Align.CENTER)
+                    if preset.get("detected"):
+                        btn.get_style_context().add_class("mintsec-primary-cta")
+                    set_accessible(
+                        btn,
+                        tr("detail.fw_allow_a11y", name=pname),
+                        tr("detail.fw_allow_desc", name=pname),
+                    )
+                    btn.connect(
+                        "clicked",
+                        lambda b, p_id=pid: self._on_allow_fw_preset(
+                            p_id,
+                            lan_chk.get_active(),
+                            b,
+                        ),
+                    )
+                row.pack_start(btn, False, False, 0)
+                presets_list.pack_start(row, False, False, 0)
+            presets_list.show_all()
+
+        _populate_presets(self._fw_search_text)
+
+        def _on_search_changed(entry: Gtk.SearchEntry) -> None:
+            self._fw_search_text = entry.get_text()
+            _populate_presets(self._fw_search_text)
+
+        search_entry.connect("changed", _on_search_changed)
+        presets_card.pack_start(presets_list, False, False, 0)
+        apps_box.pack_start(presets_card, False, False, 0)
+
+        # Processos ativos detectados fora de presets conhecidos
+        unmatched_listening = [
+            item
+            for item in (st.details.get("listening_apps") or [])
+            if not item.get("preset_id") and item.get("ports")
+        ]
+        if unmatched_listening:
+            listen_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            listen_card.get_style_context().add_class("mintsec-card")
+            lt = Gtk.Label(label=tr("detail.fw_listening_title"), xalign=0.0)
+            lt.get_style_context().add_class("mintsec-section-title")
+            ls = Gtk.Label(label=tr("detail.fw_listening_sub"), xalign=0.0)
+            ls.set_line_wrap(True)
+            ls.get_style_context().add_class("mintsec-muted")
+            listen_card.pack_start(lt, False, False, 0)
+            listen_card.pack_start(ls, False, False, 0)
+            for item in unmatched_listening[:8]:
+                proc_name = str(item.get("process", ""))
+                ports_list = list(item.get("ports") or [])
+                lrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                ll = Gtk.Label(
+                    label=f"{proc_name} — {', '.join(ports_list)}",
+                    xalign=0.0,
+                )
+                ll.set_line_wrap(True)
+                lbtn = Gtk.Button(label=tr("detail.fw_allow_lan_btn"))
+                set_accessible(
+                    lbtn,
+                    tr("detail.fw_allow_a11y", name=proc_name),
+                    tr("detail.fw_allow_desc", name=proc_name),
+                )
+                lbtn.connect(
+                    "clicked",
+                    lambda b, nm=proc_name, pts=ports_list: self._on_allow_custom_ports(
+                        nm,
+                        ", ".join(pts),
+                        "both",
+                        "in",
+                        True,
+                        b,
+                    ),
+                )
+                lrow.pack_start(ll, True, True, 0)
+                lrow.pack_start(lbtn, False, False, 0)
+                listen_card.pack_start(lrow, False, False, 0)
+            apps_box.pack_start(listen_card, False, False, 0)
+
+        # Formulário para liberar outro app ou porta personalizada
+        custom_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        custom_card.get_style_context().add_class("mintsec-card")
+        c_title = Gtk.Label(label=tr("detail.fw_custom_title"), xalign=0.0)
+        c_title.get_style_context().add_class("mintsec-section-title")
+        custom_card.pack_start(c_title, False, False, 0)
+
+        grid_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        name_lbl = Gtk.Label(label=tr("detail.fw_custom_name_lbl"), xalign=0.0)
+        custom_name = Gtk.Entry()
+        custom_name.set_placeholder_text(tr("detail.fw_custom_name_ph"))
+        relate_label(name_lbl, custom_name)
+        set_accessible(custom_name, tr("detail.fw_custom_name_lbl"), tr("detail.fw_custom_name_ph"))
+        self.fw_custom_name_entry = custom_name
+
+        ports_lbl = Gtk.Label(label=tr("detail.fw_custom_ports_lbl"), xalign=0.0)
+        custom_ports = Gtk.Entry()
+        custom_ports.set_placeholder_text(tr("detail.fw_custom_ports_ph"))
+        relate_label(ports_lbl, custom_ports)
+        set_accessible(custom_ports, tr("detail.fw_custom_ports_lbl"), tr("detail.fw_custom_ports_ph"))
+        self.fw_custom_ports_entry = custom_ports
+
+        grid_row1.pack_start(name_lbl, False, False, 0)
+        grid_row1.pack_start(custom_name, True, True, 0)
+        grid_row1.pack_start(ports_lbl, False, False, 0)
+        grid_row1.pack_start(custom_ports, True, True, 0)
+        custom_card.pack_start(grid_row1, False, False, 0)
+
+        grid_row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        proto_lbl = Gtk.Label(label=tr("detail.fw_custom_proto_lbl"), xalign=0.0)
+        custom_proto = Gtk.ComboBoxText()
+        custom_proto.append("both", tr("detail.fw_custom_proto_both"))
+        custom_proto.append("tcp", tr("detail.fw_custom_proto_tcp"))
+        custom_proto.append("udp", tr("detail.fw_custom_proto_udp"))
+        custom_proto.set_active_id("both")
+        relate_label(proto_lbl, custom_proto)
+        set_accessible(custom_proto, tr("detail.fw_custom_proto_lbl"))
+
+        dir_lbl = Gtk.Label(label=tr("detail.fw_custom_dir_lbl"), xalign=0.0)
+        custom_dir = Gtk.ComboBoxText()
+        custom_dir.append("in", tr("detail.fw_custom_dir_in"))
+        custom_dir.append("out", tr("detail.fw_custom_dir_out"))
+        custom_dir.set_active_id("in")
+        relate_label(dir_lbl, custom_dir)
+        set_accessible(custom_dir, tr("detail.fw_custom_dir_lbl"))
+
+        custom_lan = Gtk.CheckButton(label=tr("detail.fw_lan_chk", cidr=lan_cidr))
+        custom_lan.set_active(True)
+        set_accessible(custom_lan, tr("detail.fw_lan_chk", cidr=lan_cidr), tr("detail.fw_lan_chk_desc"))
+
+        custom_btn = Gtk.Button(label=tr("detail.fw_custom_btn"))
+        custom_btn.get_style_context().add_class("mintsec-primary-cta")
+        set_accessible(custom_btn, tr("detail.fw_custom_btn"), tr("detail.fw_custom_btn_desc"))
+        custom_btn.connect(
+            "clicked",
+            lambda b: self._on_allow_custom_ports(
+                custom_name.get_text(),
+                custom_ports.get_text(),
+                custom_proto.get_active_id() or "both",
+                custom_dir.get_active_id() or "in",
+                custom_lan.get_active(),
+                b,
+            ),
+        )
+        grid_row2.pack_start(proto_lbl, False, False, 0)
+        grid_row2.pack_start(custom_proto, False, False, 0)
+        grid_row2.pack_start(dir_lbl, False, False, 0)
+        grid_row2.pack_start(custom_dir, False, False, 0)
+        grid_row2.pack_start(custom_lan, True, True, 0)
+        grid_row2.pack_start(custom_btn, False, False, 0)
+        custom_card.pack_start(grid_row2, False, False, 0)
+        apps_box.pack_start(custom_card, False, False, 0)
+
+        # Perfis UFW do sistema (/etc/ufw/applications.d)
+        ufw_profiles = list(st.details.get("ufw_profiles") or [])
+        if ufw_profiles:
+            prof_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            prof_card.get_style_context().add_class("mintsec-card")
+            pr_title = Gtk.Label(label=tr("detail.fw_profiles_title"), xalign=0.0)
+            pr_title.get_style_context().add_class("mintsec-section-title")
+            prof_card.pack_start(pr_title, False, False, 0)
+            for prof in ufw_profiles[:12]:
+                p_name = str(prof["name"])
+                prow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                plbl = Gtk.Label(
+                    label=f"{prof.get('title', p_name)} ({prof.get('ports', '')})",
+                    xalign=0.0,
+                )
+                plbl.set_line_wrap(True)
+                pbtn = Gtk.Button(label=tr("detail.fw_profile_allow_btn"))
+                set_accessible(
+                    pbtn,
+                    f"{tr('detail.fw_profile_allow_btn')}: {p_name}",
+                    tr("detail.fw_profile_allow_desc", name=p_name),
+                )
+                pbtn.connect("clicked", lambda b, nm=p_name: self._on_allow_ufw_profile(nm, b))
+                prow.pack_start(plbl, True, True, 0)
+                prow.pack_start(pbtn, False, False, 0)
+                prof_card.pack_start(prow, False, False, 0)
+            apps_box.pack_start(prof_card, False, False, 0)
+
+        nb.append_page(apps_box, Gtk.Label(label=tr("detail.fw_tab_apps")))
+
+        # Aba 3: Saída
         out_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         out_box.set_margin_top(6)
         out_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -361,6 +670,7 @@ class ModuleDetailPage(Gtk.Box):
         out_box.pack_start(out_card, False, False, 0)
         nb.append_page(out_box, Gtk.Label(label=tr("detail.fw_tab_out")))
 
+        # Aba 4: Regras aplicadas
         rules_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         rules_box.set_margin_top(6)
         rules_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -380,15 +690,13 @@ class ModuleDetailPage(Gtk.Box):
         else:
             for r in rules:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                row.pack_start(
-                    Gtk.Label(
-                        label=f"{r['direction'].upper()} {r['action']} {r['target']} — {r['scope']}",
-                        xalign=0.0,
-                    ),
-                    True,
-                    True,
-                    0,
+                src_note = f" (LAN {r['source_cidr']})" if r.get("source_cidr") else ""
+                r_lbl = Gtk.Label(
+                    label=f"{r['direction'].upper()} {r['action']} {r['target']}{src_note} — {r['scope']}",
+                    xalign=0.0,
                 )
+                r_lbl.set_line_wrap(True)
+                row.pack_start(r_lbl, True, True, 0)
                 if r.get("managed_by_suite"):
                     rev = Gtk.Button(label=tr("act.revoke_btn"))
                     set_accessible(
@@ -402,6 +710,18 @@ class ModuleDetailPage(Gtk.Box):
         rules_box.pack_start(rules_card, False, False, 0)
         nb.append_page(rules_box, Gtk.Label(label=tr("detail.fw_tab_rules")))
         self.body_box.pack_start(nb, False, False, 0)
+        nb.show_all()
+
+        target_tab = (
+            self._fw_active_tab
+            if self._fw_active_tab is not None
+            else (1 if st.state == ModuleState.ATIVO else 0)
+        )
+        nb.set_current_page(target_tab)
+        nb.connect(
+            "switch-page",
+            lambda _nb, _pg, page_num: setattr(self, "_fw_active_tab", int(page_num)),
+        )
 
     def _build_recovery_section(self, st: Any) -> None:
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -719,13 +1039,89 @@ class ModuleDetailPage(Gtk.Box):
             confirm_effect=tr("detail.fw_confirm_effect"),
         )
         if ok:
+            def _do_enable() -> Any:
+                ctrl = self.app_window.controller
+                new_st = ctrl.enable_module("firewall", apply_essential_rules=True)
+                if self._fw_auto_allow_on_enable:
+                    ctrl._auto_allow_detected_lan_apps()
+                    new_st = ctrl.get_module_status("firewall")
+                return new_st
+
             run_ui_task(
                 self.app_window,
-                lambda: self.app_window.controller.enable_module("firewall", apply_essential_rules=True),
+                _do_enable,
                 on_success=lambda new_st: self.app_window.apply_module_status("firewall", new_st),
                 on_error=lambda exc: self._show_error(format_error_message(exc)),
                 busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
             )
+
+    def _on_allow_fw_preset(self, preset_id: str, lan_only: bool, btn: Any = None) -> None:
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.allow_firewall_preset(preset_id, lan_only=lan_only),
+            on_success=lambda _res: self.app_window.refresh_all(force=True),
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
+
+    def _on_revoke_fw_preset(self, preset_id: str, btn: Any = None) -> None:
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.revoke_firewall_preset(preset_id),
+            on_success=lambda _res: self.app_window.refresh_all(force=True),
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
+
+    def _on_allow_custom_ports(
+        self,
+        raw_name: str,
+        raw_ports: str,
+        protocol: str,
+        direction: str,
+        lan_only: bool,
+        btn: Any = None,
+    ) -> None:
+        app_name = str(raw_name or "").strip()
+        ports = [
+            tok.strip()
+            for part in str(raw_ports or "").split(",")
+            for tok in part.split()
+            if tok.strip()
+        ]
+        if not app_name or not ports:
+            self._show_error(tr("detail.fw_custom_missing"))
+            return
+
+        def _done(_res: Any) -> None:
+            if self.fw_custom_name_entry is not None:
+                self.fw_custom_name_entry.set_text("")
+            if self.fw_custom_ports_entry is not None:
+                self.fw_custom_ports_entry.set_text("")
+            self.app_window.refresh_all(force=True)
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.allow_firewall_custom_ports(
+                app_name=app_name,
+                ports=ports,
+                direction=direction,
+                protocol=protocol,
+                lan_only=lan_only,
+            ),
+            on_success=_done,
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
+
+    def _on_allow_ufw_profile(self, profile_name: str, btn: Any = None) -> None:
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.allow_firewall_ufw_profile(profile_name),
+            on_success=lambda _res: self.app_window.refresh_all(force=True),
+            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+        )
 
     def _set_fw_outbound(self, mode: str) -> None:
         self.app_window.controller.firewall.configure(outbound_mode=mode)
