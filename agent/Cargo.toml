@@ -1,6 +1,6 @@
 [package]
 name = "mint-security-agent"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "Agente de sessão leve em Rust para SNI, notificações D-Bus e diálogos sob demanda"
 

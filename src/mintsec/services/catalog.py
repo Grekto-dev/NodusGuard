@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from mintsec.app_log import AppLogEntry, AppLogStore
 from mintsec.auth import CallerAuthorizer
 from mintsec.autostart import sync_autostart as sync_autostart_file
 from mintsec.config import VALID_PAUSE_MODES, VALID_SCAN_POST_ACTIONS, ConfigStore, SuiteConfig
@@ -118,6 +119,7 @@ class SuiteController:
         data_dir: Path | None = None,
         clamav_db_dir: Path | None = None,
         post_scan_executor: Callable[[str], dict[str, Any]] | None = None,
+        app_log_store: AppLogStore | None = None,
     ) -> None:
         self._post_scan_executor = post_scan_executor
         self._extra_fw_app_dirs: tuple[Path, ...] = ()
@@ -127,6 +129,9 @@ class SuiteController:
         cfg = self.config_store.load()
         self.pending_store = pending_store or PendingStore()
         self.history_store = history_store or HistoryStore(enabled=cfg.history_enabled)
+        self.app_log = app_log_store or AppLogStore(
+            (data_dir / "app.log.jsonl") if data_dir is not None else None
+        )
         self.incident_manager = incident_manager or IncidentManager()
         self.runner = runner or SubprocessRunner()
         self.package_inspector = PackageInspector(self.runner)
@@ -355,9 +360,11 @@ class SuiteController:
                     reversible=True,
                 )
             self.invalidate_cache(module_id)
+            self.log_event("INFO", module_id, f"Módulo ativado: {module_id}", source="controller")
             return st
         st = svc.enable(**options)
         self.invalidate_cache(module_id)
+        self.log_event("INFO", module_id, f"Módulo ativado: {module_id}", source="controller")
         return st
 
     def disable_module(self, module_id: str, *, revert_suite_changes: bool = False) -> ModuleStatus:
@@ -393,9 +400,11 @@ class SuiteController:
                     actor="user",
                 )
             self.invalidate_cache(module_id)
+            self.log_event("INFO", module_id, f"Módulo desativado: {module_id}", source="controller")
             return st
         st = svc.disable(revert_suite_changes=revert_suite_changes)
         self.invalidate_cache(module_id)
+        self.log_event("INFO", module_id, f"Módulo desativado: {module_id}", source="controller")
         return st
 
     def revoke_firewall_rule(self, rule_id: str) -> bool:
@@ -412,9 +421,21 @@ class SuiteController:
                     actor="user",
                 )
             self.invalidate_cache("firewall")
+            self.log_event(
+                "INFO" if ok else "WARNING",
+                "firewall",
+                f"Revogação de regra {rule_id}: {'ok' if ok else 'não encontrada'}",
+                source="firewall",
+            )
             return ok
         ok = bool(self.firewall.revoke_rule(rule_id))
         self.invalidate_cache("firewall")
+        self.log_event(
+            "INFO" if ok else "WARNING",
+            "firewall",
+            f"Revogação de regra {rule_id}: {'ok' if ok else 'não encontrada'}",
+            source="firewall",
+        )
         return ok
 
     def allow_firewall_preset(
@@ -449,6 +470,7 @@ class SuiteController:
                     ModuleStatus.from_dict(res["status"])
                 ).to_dict()
             self.invalidate_cache("firewall")
+            self.log_event("INFO", "firewall", f"Aplicativo liberado no firewall: {app_label}", source="firewall")
             return res
 
         res = self.firewall.allow_app_preset(
@@ -461,6 +483,7 @@ class SuiteController:
                 ModuleStatus.from_dict(res["status"])
             ).to_dict()
         self.invalidate_cache("firewall")
+        self.log_event("INFO", "firewall", f"Aplicativo liberado no firewall: {preset_id}", source="firewall")
         return res
 
     def revoke_firewall_preset(self, preset_id: str) -> dict[str, Any]:
@@ -491,6 +514,7 @@ class SuiteController:
                 ModuleStatus.from_dict(res["status"])
             ).to_dict()
         self.invalidate_cache("firewall")
+        self.log_event("INFO", "firewall", f"Permissão de aplicativo removida: {preset_id}", source="firewall")
         return res
 
     def allow_firewall_custom_ports(
@@ -598,10 +622,49 @@ class SuiteController:
                 evidence=str(res.get("stdout") or "").strip()[:300],
             )
             self.invalidate_cache("antimalware")
+            self.log_event(
+                "INFO" if ok else "ERROR",
+                "antimalware",
+                "Atualização de definições ClamAV concluída" if ok else "Falha ao atualizar definições ClamAV",
+                details=str(res.get("stderr") or res.get("stdout") or "").strip()[:500],
+                source="freshclam",
+            )
             return res
         res = self.antimalware.update_signatures()
+        ok = bool(res.get("ok"))
         self.invalidate_cache("antimalware")
+        self.log_event(
+            "INFO" if ok else "ERROR",
+            "antimalware",
+            "Atualização de definições ClamAV concluída" if ok else "Falha ao atualizar definições ClamAV",
+            details=str(res.get("stderr") or res.get("stdout") or "").strip()[:500],
+            source="freshclam",
+        )
         return res
+
+    def log_event(
+        self,
+        level: str,
+        category: str,
+        message: str,
+        *,
+        details: str = "",
+        source: str = "",
+    ) -> AppLogEntry:
+        """Registra evento operacional visível em Configurações -> Logs."""
+        return self.app_log.record(level, category, message, details=details, source=source)
+
+    def list_app_logs(
+        self,
+        *,
+        level: str | None = None,
+        query: str = "",
+        limit: int = 500,
+    ) -> list[AppLogEntry]:
+        return self.app_log.list_entries(level=level, query=query, limit=limit)
+
+    def clear_app_logs(self) -> int:
+        return self.app_log.clear()
 
     def execute_post_scan_action(self, action: str) -> dict[str, Any]:
         """Executa ação configurada ao término do scan (nada, suspender ou desligar)."""
@@ -672,24 +735,49 @@ class SuiteController:
         self.history_store.set_enabled(cfg.history_enabled)
         return cfg
 
-    def all_statuses(self, *, use_cache: bool = False, max_age_secs: float = 15.0) -> dict[str, ModuleStatus]:
+    def all_statuses(
+        self,
+        *,
+        use_cache: bool = False,
+        max_age_secs: float = 15.0,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, ModuleStatus]:
         """Consulta os 7 módulos preservando ordem canônica (com cache/paralelismo no host real)."""
         if use_cache and self.is_live_host_runner:
             cached = self.get_cached_statuses(max_age_secs=max_age_secs)
             if cached is not None:
+                if on_progress is not None:
+                    total = len(cached)
+                    on_progress(total, total, "")
                 return cached
 
         mids = [mid for mid in self.MODULE_ORDER if mid in self.services]
+        total = len(mids)
         if self.is_live_host_runner:
             self._prime_packages()
             results: dict[str, ModuleStatus] = {}
-            with ThreadPoolExecutor(max_workers=len(mids) or 1) as pool:
-                future_map = {mid: pool.submit(self._query_module, mid) for mid in mids}
-                for mid in mids:
-                    results[mid] = future_map[mid].result()
-            ordered = results
+            with ThreadPoolExecutor(max_workers=total or 1) as pool:
+                future_map = {pool.submit(self._query_module, mid): mid for mid in mids}
+                done_cnt = 0
+                for fut in as_completed(future_map):
+                    mid = future_map[fut]
+                    results[mid] = fut.result()
+                    done_cnt += 1
+                    if on_progress is not None:
+                        try:
+                            on_progress(done_cnt, total, mid)
+                        except Exception:
+                            pass
+            ordered = {mid: results[mid] for mid in mids}
         else:
-            ordered = {mid: self._query_module(mid) for mid in mids}
+            ordered = {}
+            for idx, mid in enumerate(mids, start=1):
+                ordered[mid] = self._query_module(mid)
+                if on_progress is not None:
+                    try:
+                        on_progress(idx, total, mid)
+                    except Exception:
+                        pass
 
         with self._cache_lock:
             self._status_cache = dict(ordered)
@@ -702,6 +790,7 @@ class SuiteController:
         *,
         force: bool = False,
         max_age_secs: float = 15.0,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> bool:
         """Agenda atualização em background coalescendo chamadas simultâneas."""
         if not force and self.is_live_host_runner:
@@ -726,8 +815,19 @@ class SuiteController:
                 if run_force:
                     self.invalidate_cache(include_packages=True)
                 try:
-                    statuses = self.all_statuses(use_cache=not run_force, max_age_secs=max_age_secs)
-                except Exception:
+                    statuses = self.all_statuses(
+                        use_cache=not run_force,
+                        max_age_secs=max_age_secs,
+                        on_progress=on_progress,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.log_event(
+                        "ERROR",
+                        "refresh",
+                        "Falha ao atualizar status das proteções",
+                        details=str(exc),
+                        source="controller",
+                    )
                     statuses = {}
                 with self._cache_lock:
                     if self._refresh_force_queued:
@@ -991,6 +1091,13 @@ class SuiteController:
             reversible=True,
             revert_action="resume_protection",
         )
+        self.log_event(
+            "WARNING",
+            "protection",
+            f"Proteção pausada ({mode})",
+            details=f"{minutes} min" if mode == "timed" else "",
+            source="controller",
+        )
         return cfg
 
     def resume_protection(self) -> SuiteConfig:
@@ -1007,6 +1114,7 @@ class SuiteController:
             confirmation_state="confirmed",
             actor="suite",
         )
+        self.log_event("INFO", "protection", "Proteção retomada", source="controller")
         return cfg
 
     def check_pause_expiry(self) -> bool:
@@ -1336,12 +1444,16 @@ class SuiteController:
         *,
         statuses: dict[str, ModuleStatus] | None = None,
         recs: list[dict[str, Any]] | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
         """Aplica em ordem segura todas as recomendações automáticas pendentes."""
         target_recs = list(recs) if recs is not None else self.get_protection_recommendations(statuses=statuses)
         ordered = [r for r in target_recs if r.get("action") != "quick_scan"] + [
             r for r in target_recs if r.get("action") == "quick_scan"
         ]
+        auto_items = [r for r in ordered if r.get("auto_apply", False)]
+        total_auto = len(auto_items)
+        auto_done = 0
         applied: list[str] = []
         failed: list[dict[str, str]] = []
         skipped_manual: list[str] = []
@@ -1362,6 +1474,19 @@ class SuiteController:
                     skipped_manual.append(rid)
             except Exception as exc:  # noqa: BLE001
                 failed.append({"rec_id": rid, "error": str(exc)})
+                self.log_event(
+                    "ERROR",
+                    "recommendations",
+                    f"Falha ao aplicar recomendação {rid}",
+                    details=str(exc),
+                    source="controller",
+                )
+            auto_done += 1
+            if on_progress is not None:
+                try:
+                    on_progress(auto_done, total_auto, rid)
+                except Exception:
+                    pass
 
         if applied:
             self.history_store.record(
@@ -1370,6 +1495,13 @@ class SuiteController:
                 reason=f"Aplicadas: {', '.join(applied)}.",
                 confirmation_state="confirmed" if not failed else "incomplete",
                 actor="user",
+            )
+            self.log_event(
+                "INFO" if not failed else "WARNING",
+                "recommendations",
+                f"Recomendações aplicadas: {len(applied)} (falhas: {len(failed)})",
+                details=", ".join(applied),
+                source="controller",
             )
         self.invalidate_cache()
         return {

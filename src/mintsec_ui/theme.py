@@ -928,6 +928,30 @@ def _build_palette_css(t: dict[str, str]) -> str:
     .mintsec-window expander arrow {{
         color: {t['text_secondary']};
     }}
+    .mintsec-window .mintsec-activity-bar {{
+        background-color: {t['surface_subtle']};
+        border: 1px solid {t['divider']};
+        border-radius: 10px;
+        padding: 7px 12px;
+    }}
+    .mintsec-window progressbar.mintsec-activity-progress trough {{
+        background-color: {t['surface_elevated']};
+        border: 1px solid {t['divider']};
+        border-radius: 999px;
+        min-height: 5px;
+    }}
+    .mintsec-window progressbar.mintsec-activity-progress progress {{
+        background-color: {t['accent']};
+        border-radius: 999px;
+        min-height: 5px;
+    }}
+    textview.mintsec-log-view,
+    textview.mintsec-log-view text {{
+        background-color: {t['surface_subtle']};
+        color: {t['text_primary']};
+        font-family: monospace;
+        font-size: 0.9em;
+    }}
     .mintsec-window scrolledwindow undershoot.top,
     .mintsec-window scrolledwindow undershoot.bottom,
     .mintsec-window scrolledwindow undershoot.left,

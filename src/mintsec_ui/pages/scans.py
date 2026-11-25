@@ -612,6 +612,16 @@ class ScansPage(Gtk.Box):
         self.progress_revealer.set_reveal_child(True)
         self.scan_status_lbl.set_text(tr("scans.running_status", count=0))
         self.app_window.set_active_scan_banner(True, tr("scans.running_banner", count=0))
+        try:
+            self.app_window.controller.log_event(
+                "INFO",
+                "scans",
+                f"Varredura iniciada ({scope})",
+                details=", ".join(custom_paths) if custom_paths else "",
+                source="clamscan",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         try:
             sig = inspect.signature(service.run_scan)
@@ -687,6 +697,15 @@ class ScansPage(Gtk.Box):
             else:
                 self.progress_phase_lbl.set_text(tr("scans.phase_scanning"))
         self._update_pause_button_ui()
+        try:
+            self.app_window.controller.log_event(
+                "INFO",
+                "scans",
+                "Varredura pausada" if self._paused else "Varredura retomada",
+                source="clamscan",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def cancel_scan(self) -> None:
         if self._cancel_event is not None:
@@ -698,6 +717,10 @@ class ScansPage(Gtk.Box):
             self._cancel_event.set()
             if self._scanning:
                 self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
+                try:
+                    self.app_window.controller.log_event("WARNING", "scans", "Varredura cancelada", source="clamscan")
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _apply_stats_ui(self, stats: dict[str, Any]) -> None:
         phase = str(stats.get("phase", "scanning"))
@@ -842,6 +865,16 @@ class ScansPage(Gtk.Box):
         if err is not None or result is None:
             self.scan_status_lbl.set_text(tr("scans.failed_status", err=err))
             self._render_scan_error(err or tr("scans.unknown_err"))
+            try:
+                self.app_window.controller.log_event(
+                    "ERROR",
+                    "scans",
+                    "Falha na varredura ClamAV",
+                    details=str(err or ""),
+                    source="clamscan",
+                )
+            except Exception:  # noqa: BLE001
+                pass
             return False
 
         self._last_result = result
@@ -854,6 +887,16 @@ class ScansPage(Gtk.Box):
             )
         self.scan_status_lbl.set_text(summary)
         self._render_scan_result(result)
+        try:
+            lvl = "WARNING" if (result.detections or result.incomplete or result.cancelled) else "INFO"
+            self.app_window.controller.log_event(
+                lvl,
+                "scans",
+                summary,
+                source="clamscan",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         self.app_window.refresh_all(force=True)
         if (
             not result.cancelled

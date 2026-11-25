@@ -171,8 +171,9 @@ class I18nAndAboutTests(unittest.TestCase):
                     flush(40)
                     assert win.page_title_lbl.get_text() == "Settings"
                     nb = win.settings_page.notebook
-                    assert nb.get_n_pages() == 3
-                    assert nb.get_tab_label_text(nb.get_nth_page(2)) == "About"
+                    assert nb.get_n_pages() == 4
+                    assert nb.get_tab_label_text(nb.get_nth_page(2)) == "Logs"
+                    assert nb.get_tab_label_text(nb.get_nth_page(3)) == "About"
                     about_texts = "\\n".join(collect_labels(win.settings_page.about_tab))
                     for required in ("{APP_NAME}", "{__version__}", "Version {__version__}", "GTK 3", "Rust", "ClamAV", "UFW", "restic", "Timeshift", "ComfyUI", "Qwen Image 2.1"):
                         assert required in about_texts, f"Missing {{required!r}} in About tab: {{about_texts}}"
@@ -184,7 +185,8 @@ class I18nAndAboutTests(unittest.TestCase):
                     assert win.page_title_lbl.get_text() == "Configurações"
                     assert win._sidebar_labels["home"].get_text() == "Início"
                     assert win._sidebar_labels["protections"].get_text() == "Proteções"
-                    assert nb.get_tab_label_text(nb.get_nth_page(2)) == "Sobre"
+                    assert nb.get_tab_label_text(nb.get_nth_page(2)) == "Logs"
+                    assert nb.get_tab_label_text(nb.get_nth_page(3)) == "Sobre"
                     about_pt = "\\n".join(collect_labels(win.settings_page.about_tab))
                     assert "Versão {__version__}" in about_pt, about_pt
                     assert "Créditos e projetos utilizados" in about_pt, about_pt
@@ -209,7 +211,7 @@ class I18nAndAboutTests(unittest.TestCase):
                     assert ctrl.config_store.load().language == "en"
                     assert win.page_title_lbl.get_text() == "Settings"
                     assert win._sidebar_labels["home"].get_text() == "Home"
-                    assert nb.get_tab_label_text(nb.get_nth_page(2)) == "About"
+                    assert nb.get_tab_label_text(nb.get_nth_page(3)) == "About"
 
                     win.destroy()
                     flush(40)

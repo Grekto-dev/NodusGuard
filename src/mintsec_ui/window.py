@@ -13,10 +13,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from mintsec import APP_NAME  # noqa: E402
-from mintsec.formatting import format_error_message  # noqa: E402
+from mintsec.formatting import build_error_report, format_error_message  # noqa: E402
 from mintsec.services.catalog import SuiteController  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
+from mintsec_ui.dialogs.error_dialog import show_error_dialog  # noqa: E402
 from mintsec_ui.dialogs.first_run import FirstRunDialog  # noqa: E402
 from mintsec_ui.dialogs.pause_protection import PauseProtectionDialog  # noqa: E402
 from mintsec_ui.dialogs.paused_app import PausedAppDialog  # noqa: E402
@@ -85,6 +86,10 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self._csd_headerbar: Gtk.HeaderBar | None = None
         self._anim_sig: int | None = None
         self._bg_timer_id: int | None = None
+        self._activity_pulse_id: int | None = None
+        self._activity_seq: int = 0
+        self._active_tasks: dict[str, dict[str, Any]] = {}
+        self._refresh_activity_tid: str | None = None
         self._cached_statuses: dict[str, Any] | None = None
         self._sidebar_buttons: dict[str, Gtk.Button] = {}
         self._sidebar_labels: dict[str, Gtk.Label] = {}
@@ -211,6 +216,25 @@ class SuiteWindow(Gtk.ApplicationWindow):
 
         self.content_wrap.pack_start(header_row, False, False, 0)
 
+        # Barra discreta de progresso global (oculta quando ociosa; 0 repinturas paradas)
+        self.activity_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.activity_bar.get_style_context().add_class("mintsec-activity-bar")
+        self.activity_bar.set_no_show_all(True)
+        act_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.activity_lbl = Gtk.Label(label="", xalign=0.0)
+        self.activity_lbl.set_ellipsize(3)  # Pango.EllipsizeMode.END
+        self.activity_lbl.get_style_context().add_class("mintsec-caption")
+        self.activity_meta_lbl = Gtk.Label(label="", xalign=1.0)
+        self.activity_meta_lbl.get_style_context().add_class("mintsec-muted")
+        act_top.pack_start(self.activity_lbl, True, True, 0)
+        act_top.pack_start(self.activity_meta_lbl, False, False, 0)
+        self.activity_progress = Gtk.ProgressBar()
+        self.activity_progress.get_style_context().add_class("mintsec-activity-progress")
+        self.activity_progress.set_pulse_step(0.14)
+        self.activity_bar.pack_start(act_top, False, False, 0)
+        self.activity_bar.pack_start(self.activity_progress, False, False, 0)
+        self.content_wrap.pack_start(self.activity_bar, False, False, 0)
+
         # Faixa discreta durante verificação em andamento
         self.active_scan_btn = Gtk.Button()
         self.active_scan_btn.get_style_context().add_class("mintsec-banner-active")
@@ -322,6 +346,10 @@ class SuiteWindow(Gtk.ApplicationWindow):
         if self._bg_timer_id is not None:
             GLib.source_remove(self._bg_timer_id)
             self._bg_timer_id = None
+        if self._activity_pulse_id is not None:
+            GLib.source_remove(self._activity_pulse_id)
+            self._activity_pulse_id = None
+        self._active_tasks.clear()
         gtk_settings = Gtk.Settings.get_default()
         if gtk_settings is not None and self._anim_sig is not None:
             try:
@@ -536,6 +564,172 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.home_page.set_high_contrast(self._high_contrast)
         self._sync_animations_pref()
 
+    def _can_animate_ui(self) -> bool:
+        gtk_settings = Gtk.Settings.get_default()
+        anim_enabled = True
+        if gtk_settings is not None:
+            try:
+                anim_enabled = bool(gtk_settings.get_property("gtk-enable-animations"))
+            except Exception:  # noqa: BLE001
+                anim_enabled = True
+        return anim_enabled and not self._high_contrast
+
+    def _stop_activity_pulse(self) -> None:
+        if self._activity_pulse_id is not None:
+            GLib.source_remove(self._activity_pulse_id)
+            self._activity_pulse_id = None
+
+    def _pulse_activity_bar(self) -> bool:
+        if (
+            self._destroyed
+            or not self.activity_bar.get_visible()
+            or not self._active_tasks
+            or not self._can_animate_ui()
+        ):
+            self._activity_pulse_id = None
+            return False
+        if not any(t.get("fraction") is None for t in self._active_tasks.values()):
+            self._activity_pulse_id = None
+            return False
+        self.activity_progress.pulse()
+        return True
+
+    def _render_activity_bar(self) -> None:
+        if self._destroyed:
+            return
+        if not self._active_tasks:
+            self._stop_activity_pulse()
+            self.activity_bar.hide()
+            return
+
+        tasks = list(self._active_tasks.values())
+        cur = tasks[-1]
+        extra = len(tasks) - 1
+        label = str(cur.get("label") or "")
+        if extra > 0:
+            label = f"{label} {tr('win.activity_more', count=extra)}"
+        self.activity_lbl.set_text(label)
+
+        frac = cur.get("fraction")
+        if frac is not None:
+            clamped = max(0.0, min(1.0, float(frac)))
+            self.activity_progress.set_fraction(clamped)
+            self.activity_meta_lbl.set_text(f"{int(round(clamped * 100))}%")
+        else:
+            self.activity_meta_lbl.set_text("")
+            self.activity_progress.pulse()
+
+        self.activity_lbl.show()
+        self.activity_meta_lbl.show()
+        self.activity_progress.show()
+        for ch in self.activity_bar.get_children():
+            ch.show()
+        self.activity_bar.show()
+
+        needs_pulse = any(t.get("fraction") is None for t in tasks)
+        if needs_pulse and self._can_animate_ui():
+            if self._activity_pulse_id is None:
+                self._activity_pulse_id = GLib.timeout_add(160, self._pulse_activity_bar)
+        else:
+            self._stop_activity_pulse()
+
+    def begin_activity(
+        self,
+        label: str,
+        *,
+        category: str = "app",
+        fraction: float | None = None,
+        log: bool = True,
+    ) -> str:
+        """Registra tarefa em andamento e exibe barra discreta de progresso global."""
+        self._activity_seq += 1
+        tid = f"task-{self._activity_seq}"
+        self._active_tasks[tid] = {
+            "label": str(label),
+            "category": str(category),
+            "fraction": fraction,
+        }
+        if log:
+            try:
+                self.controller.log_event("INFO", category, label, source="ui")
+            except Exception:  # noqa: BLE001
+                pass
+        self._render_activity_bar()
+        return tid
+
+    def update_activity(
+        self,
+        task_id: str | None,
+        *,
+        label: str | None = None,
+        fraction: float | None = None,
+    ) -> None:
+        if not task_id or task_id not in self._active_tasks:
+            return
+        entry = self._active_tasks[task_id]
+        if label is not None:
+            entry["label"] = str(label)
+        if fraction is not None:
+            entry["fraction"] = float(fraction)
+        self._render_activity_bar()
+
+    def end_activity(
+        self,
+        task_id: str | None,
+        *,
+        status: str = "ok",
+        detail: str = "",
+    ) -> None:
+        if not task_id:
+            return
+        entry = self._active_tasks.pop(task_id, None)
+        if entry is not None and status != "ok":
+            lvl = "ERROR" if status == "error" else "WARNING"
+            try:
+                self.controller.log_event(
+                    lvl,
+                    str(entry.get("category") or "app"),
+                    f"{entry.get('label', '')}: {status}",
+                    details=detail,
+                    source="ui",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        self._render_activity_bar()
+
+    def show_error(
+        self,
+        error: Exception | str,
+        *,
+        operation: str = "",
+        source: str = "NodusGuard",
+        title: str | None = None,
+    ) -> None:
+        """Registra erro nos logs do aplicativo e exibe diálogo claro e acionável."""
+        from mintsec_ui.i18n import get_language
+
+        report = build_error_report(error, operation=operation, lang=get_language())
+        try:
+            self.controller.log_event(
+                "ERROR",
+                operation or "error",
+                report.summary,
+                details=report.technical_details,
+                source=source,
+            )
+            if getattr(self, "settings_page", None) is not None:
+                self.settings_page.refresh_logs()
+        except Exception:  # noqa: BLE001
+            pass
+        show_error_dialog(
+            self,
+            error,
+            operation=operation,
+            source=source,
+            title=title,
+            open_logs_cb=lambda: self.navigate_to("settings", tab="logs"),
+        )
+
     def set_active_scan_banner(self, visible: bool, text: str) -> None:
         if visible:
             self.active_scan_lbl.set_text(text)
@@ -552,16 +746,48 @@ class SuiteWindow(Gtk.ApplicationWindow):
             self._apply_async_statuses(statuses)
             return
 
+        if self._refresh_activity_tid is None:
+            self._refresh_activity_tid = self.begin_activity(
+                tr("win.activity_refresh"),
+                category="refresh",
+                fraction=0.0,
+                log=force,
+            )
+        tid = self._refresh_activity_tid
+
+        def _on_prog(done: int, total: int, mid: str) -> None:
+            def _apply_p() -> bool:
+                if self._destroyed:
+                    return False
+                frac = float(done) / float(max(1, total))
+                lbl = (
+                    tr(
+                        "win.activity_refresh_mod",
+                        name=friendly_module_name(mid, mid),
+                    )
+                    if mid
+                    else tr("win.activity_refresh")
+                )
+                self.update_activity(tid, label=lbl, fraction=frac)
+                return False
+
+            GLib.idle_add(_apply_p)
+
         def _bg_done(statuses: dict[str, Any]) -> None:
-            if not self._destroyed and statuses:
+            if not self._destroyed:
                 GLib.idle_add(self._on_async_statuses_ready, statuses)
 
-        self.controller.refresh_statuses_async(_bg_done, force=force)
+        self.controller.refresh_statuses_async(_bg_done, force=force, on_progress=_on_prog)
 
     def _on_async_statuses_ready(self, statuses: dict[str, Any]) -> bool:
+        tid = self._refresh_activity_tid
+        self._refresh_activity_tid = None
+        if tid is not None:
+            self.end_activity(tid)
         if self._destroyed:
             return False
-        self._apply_async_statuses(statuses)
+        if statuses:
+            self._apply_async_statuses(statuses)
         return False
 
     def _apply_async_statuses(self, statuses: dict[str, Any]) -> None:
@@ -741,27 +967,39 @@ class SuiteWindow(Gtk.ApplicationWindow):
         btn = getattr(self.home_page, "update_db_btn", None)
         if btn is not None:
             btn.set_sensitive(False)
+        tid = self.begin_activity(tr("win.activity_update_db"), category="antimalware")
 
         def _worker() -> None:
             ok = False
-            err_msg = ""
+            err_obj: Exception | str | None = None
             try:
                 res = self.controller.update_antimalware_signatures()
                 ok = bool(res.get("ok"))
                 if not ok:
-                    err_msg = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
+                    err_obj = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
             except Exception as exc:  # noqa: BLE001
-                err_msg = format_error_message(exc)
+                err_obj = exc
 
             def _done() -> bool:
                 self._updating_db = False
                 if self._destroyed:
                     return False
+                err_text = (
+                    format_error_message(err_obj)
+                    if isinstance(err_obj, Exception)
+                    else str(err_obj or "")
+                )
+                self.end_activity(tid, status="ok" if ok else "error", detail=err_text)
                 if btn is not None:
                     btn.set_sensitive(True)
-                if not ok and err_msg:
+                if not ok and err_obj:
                     self.scans_page.scan_status_lbl.set_text(
-                        tr("win.db_update_failed", err=err_msg)
+                        tr("win.db_update_failed", err=err_text)
+                    )
+                    self.show_error(
+                        err_obj,
+                        operation=tr("win.activity_update_db"),
+                        source="FreshClam",
                     )
                 else:
                     self.scans_page.scan_status_lbl.set_text(tr("win.db_update_done"))
@@ -784,16 +1022,23 @@ class SuiteWindow(Gtk.ApplicationWindow):
             and self.controller.is_auto_scan_due()
         ):
             self._auto_scanning = True
+            tid = self.begin_activity(tr("win.activity_auto_scan"), category="antimalware")
 
             def _bg_scan() -> None:
+                scan_err = ""
                 try:
                     self.controller.antimalware.run_scan(scope="quick")
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    scan_err = format_error_message(exc)
                 finally:
                     def _done_auto() -> bool:
                         self._auto_scanning = False
                         if not self._destroyed:
+                            self.end_activity(
+                                tid,
+                                status="error" if scan_err else "ok",
+                                detail=scan_err,
+                            )
                             self.refresh_all(force=True)
                         return False
 

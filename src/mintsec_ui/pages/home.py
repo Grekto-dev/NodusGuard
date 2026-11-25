@@ -743,7 +743,16 @@ class HomePage(Gtk.Box):
                 self.in_use_card.pack_start(row, False, False, 0)
         self.in_use_card.show_all()
 
-    def _show_rec_error(self, msg: str) -> None:
+    def _show_rec_error(self, err: Exception | str, *, operation: str = "") -> None:
+        if hasattr(self.app_window, "show_error"):
+            self.app_window.show_error(
+                err,
+                operation=operation or tr("home.rec_apply_err_title"),
+                source="NodusGuard",
+                title=tr("home.rec_apply_err_title"),
+            )
+            return
+        msg = format_error_message(err) if isinstance(err, Exception) else str(err)
         ask_action_confirmation(
             self.app_window,
             title=tr("home.rec_apply_err_title"),
@@ -766,12 +775,15 @@ class HomePage(Gtk.Box):
             self._last_render_sig = None
             self.app_window.refresh_all(force=True)
 
+        rec_title, _sub, _act = self._describe_recommendation(rec, has_last_scan=self._last_has_scan)
         run_ui_task(
             self.app_window,
             lambda: self.app_window.controller.apply_recommendation(rec),
             on_success=_done,
-            on_error=lambda exc: self._show_rec_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_rec_error(exc, operation=rec_title),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_apply_rec"),
+            category="recommendations",
         )
 
     def _on_show_more_recs(self, anchor_btn: Gtk.Button) -> None:
@@ -847,10 +859,16 @@ class HomePage(Gtk.Box):
 
         run_ui_task(
             self.app_window,
-            lambda: self.app_window.controller.apply_all_recommendations(recs=recs),
+            lambda on_prog=None: self.app_window.controller.apply_all_recommendations(
+                recs=recs,
+                on_progress=on_prog,
+            ),
             on_success=_done,
-            on_error=lambda exc: self._show_rec_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_rec_error(exc, operation=tr("win.activity_apply_all_recs")),
             busy_widget=busy_widget if isinstance(busy_widget, Gtk.Widget) else None,
+            activity_label=tr("win.activity_apply_all_recs"),
+            category="recommendations",
+            pass_progress=True,
         )
 
     def _run_action(self, action: str | None, target: Any = None) -> None:

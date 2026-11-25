@@ -84,7 +84,7 @@ class ModuleDetailPage(Gtk.Box):
             st = controller.get_module_status(mod_id)
 
         if st is None:
-            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             card.get_style_context().add_class("mintsec-card")
             card.pack_start(
                 make_empty_state(
@@ -96,6 +96,10 @@ class ModuleDetailPage(Gtk.Box):
                 False,
                 0,
             )
+            load_bar = Gtk.ProgressBar()
+            load_bar.get_style_context().add_class("mintsec-activity-progress")
+            load_bar.set_fraction(0.25)
+            card.pack_start(load_bar, False, False, 0)
             self.body_box.pack_start(card, False, False, 0)
             self.body_box.show_all()
             return
@@ -1010,7 +1014,7 @@ class ModuleDetailPage(Gtk.Box):
         def _done(_res: dict[str, Any]) -> None:
             if not _res.get("ok"):
                 err_txt = str(_res.get("stderr") or _res.get("stdout") or "freshclam failed").strip()
-                self._show_error(err_txt)
+                self._show_error(err_txt, operation=tr("win.activity_update_db"))
                 return
             self.app_window.refresh_all(force=True)
 
@@ -1018,8 +1022,10 @@ class ModuleDetailPage(Gtk.Box):
             self.app_window,
             self.app_window.controller.update_antimalware_signatures,
             on_success=_done,
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_update_db")),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_update_db"),
+            category="antimalware",
         )
 
     def _save_am_exclusions(self, raw_text: str) -> None:
@@ -1047,12 +1053,15 @@ class ModuleDetailPage(Gtk.Box):
                     new_st = ctrl.get_module_status("firewall")
                 return new_st
 
+            fw_name = friendly_module_name("firewall", self.app_window.controller.manifests["firewall"].display_name)
             run_ui_task(
                 self.app_window,
                 _do_enable,
                 on_success=lambda new_st: self.app_window.apply_module_status("firewall", new_st),
-                on_error=lambda exc: self._show_error(format_error_message(exc)),
+                on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_enable_mod", name=fw_name)),
                 busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+                activity_label=tr("win.activity_enable_mod", name=fw_name),
+                category="firewall",
             )
 
     def _on_allow_fw_preset(self, preset_id: str, lan_only: bool, btn: Any = None) -> None:
@@ -1060,8 +1069,10 @@ class ModuleDetailPage(Gtk.Box):
             self.app_window,
             lambda: self.app_window.controller.allow_firewall_preset(preset_id, lan_only=lan_only),
             on_success=lambda _res: self.app_window.refresh_all(force=True),
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_fw_allow", name=preset_id)),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_allow", name=preset_id),
+            category="firewall",
         )
 
     def _on_revoke_fw_preset(self, preset_id: str, btn: Any = None) -> None:
@@ -1069,8 +1080,10 @@ class ModuleDetailPage(Gtk.Box):
             self.app_window,
             lambda: self.app_window.controller.revoke_firewall_preset(preset_id),
             on_success=lambda _res: self.app_window.refresh_all(force=True),
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_fw_revoke")),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_revoke"),
+            category="firewall",
         )
 
     def _on_allow_custom_ports(
@@ -1090,7 +1103,7 @@ class ModuleDetailPage(Gtk.Box):
             if tok.strip()
         ]
         if not app_name or not ports:
-            self._show_error(tr("detail.fw_custom_missing"))
+            self._show_error(tr("detail.fw_custom_missing"), operation="allow_custom_ports")
             return
 
         def _done(_res: Any) -> None:
@@ -1110,8 +1123,10 @@ class ModuleDetailPage(Gtk.Box):
                 lan_only=lan_only,
             ),
             on_success=_done,
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_fw_allow", name=app_name)),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_allow", name=app_name),
+            category="firewall",
         )
 
     def _on_allow_ufw_profile(self, profile_name: str, btn: Any = None) -> None:
@@ -1119,8 +1134,10 @@ class ModuleDetailPage(Gtk.Box):
             self.app_window,
             lambda: self.app_window.controller.allow_firewall_ufw_profile(profile_name),
             on_success=lambda _res: self.app_window.refresh_all(force=True),
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_fw_allow", name=profile_name)),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_allow", name=profile_name),
+            category="firewall",
         )
 
     def _set_fw_outbound(self, mode: str) -> None:
@@ -1133,8 +1150,10 @@ class ModuleDetailPage(Gtk.Box):
             self.app_window,
             lambda: self.app_window.controller.revoke_firewall_rule(rule_id),
             on_success=lambda _ok: self.app_window.refresh_all(force=True),
-            on_error=lambda exc: self._show_error(format_error_message(exc)),
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_fw_revoke")),
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_revoke"),
+            category="firewall",
         )
 
     def _on_disable_module(self, mod_id: str, btn: Any = None) -> None:
@@ -1156,15 +1175,26 @@ class ModuleDetailPage(Gtk.Box):
                 self.app_window,
                 lambda: self.app_window.controller.disable_module(mod_id, revert_suite_changes=True),
                 on_success=lambda new_st: self.app_window.apply_module_status(mod_id, new_st),
-                on_error=lambda exc: self._show_error(format_error_message(exc)),
+                on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_disable_mod", name=friendly)),
                 busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+                activity_label=tr("win.activity_disable_mod", name=friendly),
+                category=mod_id,
             )
 
-    def _show_error(self, message: str) -> None:
+    def _show_error(self, error: Exception | str, *, operation: str = "") -> None:
+        if hasattr(self.app_window, "show_error"):
+            self.app_window.show_error(
+                error,
+                operation=operation or tr("detail.err_title"),
+                source=tr("detail.err_actor"),
+                title=tr("detail.err_title"),
+            )
+            return
+        msg = format_error_message(error) if isinstance(error, Exception) else str(error)
         ask_action_confirmation(
             self.app_window,
             title=tr("detail.err_title"),
-            summary=message,
+            summary=msg,
             actor=tr("detail.err_actor"),
             evidence=tr("detail.err_evidence"),
             confirm_label=tr("common.close"),

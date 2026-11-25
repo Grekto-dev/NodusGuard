@@ -5,6 +5,17 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-11-25
+
+### Added
+- **Non-Intrusive Global Progress & Activity Indicator**:
+  - Added a subtle collapsible progress bar (`activity_bar`) in the main window that shows live background operations and deterministic progress percentages (`Checking protections…`, module switches, database updates, package installs, firewall edits, batch recommendation apply) and hides completely with zero idle timers once finished.
+  - Added static loading progress indicators in Protections and Module Detail placeholders.
+- **Application Logs Tab (`Settings → Logs`)**:
+  - Added persistent symlink-safe operational logging (`AppLogStore` under `XDG_STATE_HOME/app.log.jsonl`) recording checks, scans, protection changes, and error diagnostics, with level filtering (`Info`, `Warnings`, `Errors`), keyword search, refresh, and confirmation-guarded **Clear logs…** action.
+- **Detailed & Actionable Error Diagnostics**:
+  - Added structured error classification (`build_error_report` + `show_error_dialog`) explaining probable causes, recommended fixes, expandable technical details, and a direct **Open Logs** shortcut for Polkit denials, root/daemon issues, D-Bus errors, timeouts, FreshClam lock/DNS failures, missing binaries, and firewall rule rejections.
+
 ## [0.2.3] - 2026-11-25
 
 ### Added

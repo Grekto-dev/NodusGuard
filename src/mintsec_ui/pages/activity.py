@@ -339,11 +339,16 @@ class ActivityPage(Gtk.Box):
         self.history_list_box.show_all()
 
     def _on_revoke_rule(self, rule_id: str, btn: Any = None) -> None:
-        run_ui_task(
-            self.app_window,
-            lambda: self.app_window.controller.revoke_firewall_rule(rule_id),
-            on_success=lambda _ok: self.app_window.refresh_all(force=True),
-            on_error=lambda exc: ask_action_confirmation(
+        def _err(exc: Exception) -> None:
+            if hasattr(self.app_window, "show_error"):
+                self.app_window.show_error(
+                    exc,
+                    operation=tr("win.activity_fw_revoke"),
+                    source=tr("detail.err_actor"),
+                    title=tr("detail.err_title"),
+                )
+                return
+            ask_action_confirmation(
                 self.app_window,
                 title=tr("detail.err_title"),
                 summary=format_error_message(exc),
@@ -351,6 +356,14 @@ class ActivityPage(Gtk.Box):
                 evidence=tr("detail.err_evidence"),
                 confirm_label=tr("common.close"),
                 confirm_effect=tr("common.close_notice"),
-            ),
+            )
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.revoke_firewall_rule(rule_id),
+            on_success=lambda _ok: self.app_window.refresh_all(force=True),
+            on_error=_err,
             busy_widget=btn if isinstance(btn, Gtk.Widget) else None,
+            activity_label=tr("win.activity_fw_revoke"),
+            category="firewall",
         )

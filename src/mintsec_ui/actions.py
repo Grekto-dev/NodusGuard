@@ -20,16 +20,24 @@ from mintsec_ui.widgets import friendly_module_name  # noqa: E402
 
 def run_ui_task(
     app_window: Any,
-    work_fn: Callable[[], Any],
+    work_fn: Callable[..., Any],
     *,
     on_success: Callable[[Any], None],
     on_error: Callable[[Exception], None],
     busy_widget: Any = None,
+    activity_label: str | None = None,
+    category: str = "action",
+    pass_progress: bool = False,
 ) -> None:
     """Executa operação longa fora da thread GTK no host real, mantendo testes síncronos."""
+    def _invoke_work(on_prog: Callable[[int, int, str], None] | None) -> Any:
+        if pass_progress:
+            return work_fn(on_prog)
+        return work_fn()
+
     if not app_window.controller.is_live_host_runner:
         try:
-            res = work_fn()
+            res = _invoke_work(None)
         except Exception as exc:  # noqa: BLE001
             on_error(exc)
             return
@@ -38,10 +46,31 @@ def run_ui_task(
 
     if busy_widget is not None:
         busy_widget.set_sensitive(False)
+    tid = (
+        app_window.begin_activity(
+            activity_label,
+            category=category,
+            fraction=0.0 if pass_progress else None,
+        )
+        if activity_label and hasattr(app_window, "begin_activity")
+        else None
+    )
+
+    def _on_prog(done: int, total: int, _tag: str) -> None:
+        if tid is None:
+            return
+
+        def _upd() -> bool:
+            if not getattr(app_window, "_destroyed", False):
+                frac = float(done) / float(max(1, total))
+                app_window.update_activity(tid, fraction=frac)
+            return False
+
+        GLib.idle_add(_upd)
 
     def _worker() -> None:
         try:
-            res = work_fn()
+            res = _invoke_work(_on_prog if pass_progress else None)
             err: Exception | None = None
         except Exception as exc:  # noqa: BLE001
             res = None
@@ -50,6 +79,12 @@ def run_ui_task(
         def _finish() -> bool:
             if getattr(app_window, "_destroyed", False):
                 return False
+            if tid is not None and hasattr(app_window, "end_activity"):
+                app_window.end_activity(
+                    tid,
+                    status="error" if err is not None else "ok",
+                    detail=format_error_message(err) if err is not None else "",
+                )
             if busy_widget is not None:
                 busy_widget.set_sensitive(True)
             if err is not None:
@@ -61,6 +96,30 @@ def run_ui_task(
         GLib.idle_add(_finish)
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def _report_ui_error(
+    app_window: Any,
+    error: Exception | str,
+    *,
+    title: str,
+    operation: str,
+    source: str,
+    evidence: str,
+) -> None:
+    if hasattr(app_window, "show_error"):
+        app_window.show_error(error, operation=operation, source=source, title=title)
+        return
+    summary = format_error_message(error) if isinstance(error, Exception) else str(error)
+    ask_action_confirmation(
+        app_window,
+        title=title,
+        summary=summary,
+        actor=source,
+        evidence=evidence,
+        confirm_label=tr("common.understood"),
+        confirm_effect=tr("common.close_notice"),
+    )
 
 
 def trigger_module_install(app_window: Any, mod_id: str) -> None:
@@ -78,23 +137,41 @@ def trigger_module_install(app_window: Any, mod_id: str) -> None:
         confirm_label=tr("actions.install_confirm"),
         confirm_effect=tr("actions.install_effect"),
     )
-    if ok:
-        res = controller.installer.install_packages(manifest.packages)
+    if not ok:
+        return
+
+    def _on_ok(res: dict[str, Any]) -> None:
         if not res.get("ok"):
-            ask_action_confirmation(
+            err_txt = str(res.get("error") or res.get("message") or tr("actions.install_err_fallback"))
+            _report_ui_error(
                 app_window,
+                err_txt,
                 title=tr("actions.install_err_title", name=friendly_name),
-                summary=str(res.get("error") or res.get("message") or tr("actions.install_err_fallback")),
-                actor=tr("actions.install_err_actor"),
+                operation=tr("actions.install_title", name=friendly_name),
+                source=tr("actions.install_err_actor"),
                 evidence=tr("actions.install_err_evidence", packages=pkgs),
-                confirm_label=tr("common.understood"),
-                confirm_effect=tr("common.close_notice"),
             )
             return
         controller.invalidate_cache(include_packages=True)
         for page in (app_window.home_page, app_window.protections_page):
             page._last_render_sig = None
         app_window.refresh_all(force=True)
+
+    run_ui_task(
+        app_window,
+        lambda: controller.installer.install_packages(manifest.packages),
+        on_success=_on_ok,
+        on_error=lambda exc: _report_ui_error(
+            app_window,
+            exc,
+            title=tr("actions.install_err_title", name=friendly_name),
+            operation=tr("actions.install_title", name=friendly_name),
+            source=tr("actions.install_err_actor"),
+            evidence=tr("actions.install_err_evidence", packages=pkgs),
+        ),
+        activity_label=tr("win.activity_install_mod", name=friendly_name),
+        category=mod_id,
+    )
 
 
 def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> bool:
@@ -119,14 +196,13 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
             app_window.apply_module_status(mod_id, new_st)
 
         def _on_enable_err(exc: Exception) -> None:
-            ask_action_confirmation(
+            _report_ui_error(
                 app_window,
+                exc,
                 title=tr("actions.enable_err_title", name=friendly_name),
-                summary=format_error_message(exc),
-                actor=friendly_name,
+                operation=tr("win.activity_enable_mod", name=friendly_name),
+                source=friendly_name,
                 evidence=tr("actions.enable_err_evidence"),
-                confirm_label=tr("common.understood"),
-                confirm_effect=tr("common.close_notice"),
             )
             app_window.refresh_all(force=False)
 
@@ -136,6 +212,8 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
                 lambda: controller.enable_module(mod_id),
                 on_success=_on_enable_ok,
                 on_error=_on_enable_err,
+                activity_label=tr("win.activity_enable_mod", name=friendly_name),
+                category=mod_id,
             )
             return True
 
@@ -164,14 +242,13 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
         app_window.apply_module_status(mod_id, new_st)
 
     def _on_disable_err(exc: Exception) -> None:
-        ask_action_confirmation(
+        _report_ui_error(
             app_window,
+            exc,
             title=tr("actions.disable_err_title", name=friendly_name),
-            summary=format_error_message(exc),
-            actor=friendly_name,
+            operation=tr("win.activity_disable_mod", name=friendly_name),
+            source=friendly_name,
             evidence=tr("actions.disable_err_evidence"),
-            confirm_label=tr("common.understood"),
-            confirm_effect=tr("common.close_notice"),
         )
         app_window.refresh_all(force=False)
 
@@ -181,6 +258,8 @@ def handle_module_switch(app_window: Any, mod_id: str, desired_active: bool) -> 
             lambda: controller.disable_module(mod_id, revert_suite_changes=True),
             on_success=_on_disable_ok,
             on_error=_on_disable_err,
+            activity_label=tr("win.activity_disable_mod", name=friendly_name),
+            category=mod_id,
         )
         return True
 

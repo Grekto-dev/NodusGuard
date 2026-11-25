@@ -11,6 +11,7 @@ from gi.repository import Gtk  # noqa: E402
 
 from mintsec import APP_NAME, __version__  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
+from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import get_language, tr  # noqa: E402
 from mintsec_ui.widgets import clear_container, make_illustration, make_pill  # noqa: E402
 
@@ -258,19 +259,88 @@ class SettingsPage(Gtk.Box):
         self._tab_alerts_lbl = Gtk.Label(label="")
         self.notebook.append_page(pref_wrap, self._tab_alerts_lbl)
 
-        # Aba 3: Sobre / About (nome, versão e créditos de código aberto)
+        # Aba 3: Logs operacionais e diagnóstico
+        self.logs_tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.logs_tab.set_margin_top(6)
+        self.logs_tab.set_margin_bottom(12)
+        self._logs_populating = False
+
+        logs_hdr_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        logs_hdr_card.get_style_context().add_class("mintsec-list-card")
+
+        logs_title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self._logs_title_lbl = Gtk.Label(label="", xalign=0.0)
+        self._logs_title_lbl.get_style_context().add_class("mintsec-section-title")
+        self.logs_count_lbl = Gtk.Label(label="", xalign=1.0)
+        self.logs_count_lbl.get_style_context().add_class("mintsec-muted")
+        logs_title_row.pack_start(self._logs_title_lbl, True, True, 0)
+        logs_title_row.pack_start(self.logs_count_lbl, False, False, 0)
+        logs_hdr_card.pack_start(logs_title_row, False, False, 0)
+
+        self._logs_sub_lbl = Gtk.Label(label="", xalign=0.0)
+        self._logs_sub_lbl.set_line_wrap(True)
+        self._logs_sub_lbl.get_style_context().add_class("mintsec-muted")
+        logs_hdr_card.pack_start(self._logs_sub_lbl, False, False, 0)
+
+        logs_ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.logs_level_combo = Gtk.ComboBoxText()
+        self.logs_level_combo.set_size_request(150, -1)
+        self.logs_level_combo.connect("changed", lambda *_: self.refresh_logs() if not self._logs_populating else None)
+
+        self.logs_search_entry = Gtk.SearchEntry()
+        self.logs_search_entry.connect("changed", lambda *_: self.refresh_logs() if not self._logs_populating else None)
+
+        self.refresh_logs_btn = Gtk.Button(label="")
+        self.refresh_logs_btn.connect("clicked", lambda *_: self.refresh_logs())
+
+        self.clear_logs_btn = Gtk.Button(label="")
+        self.clear_logs_btn.get_style_context().add_class("destructive-action")
+        self.clear_logs_btn.connect("clicked", self._on_clear_logs)
+
+        logs_ctrl_row.pack_start(self.logs_level_combo, False, False, 0)
+        logs_ctrl_row.pack_start(self.logs_search_entry, True, True, 0)
+        logs_ctrl_row.pack_start(self.refresh_logs_btn, False, False, 0)
+        logs_ctrl_row.pack_start(self.clear_logs_btn, False, False, 0)
+        logs_hdr_card.pack_start(logs_ctrl_row, False, False, 0)
+        self.logs_tab.pack_start(logs_hdr_card, False, False, 0)
+
+        logs_view_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        logs_view_card.get_style_context().add_class("mintsec-card")
+        logs_scroller = Gtk.ScrolledWindow()
+        logs_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        logs_scroller.set_min_content_height(320)
+        self.logs_text_view = Gtk.TextView()
+        self.logs_text_view.set_editable(False)
+        self.logs_text_view.set_cursor_visible(False)
+        self.logs_text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.logs_text_view.get_style_context().add_class("mintsec-log-view")
+        logs_scroller.add(self.logs_text_view)
+        logs_view_card.pack_start(logs_scroller, True, True, 0)
+        self.logs_tab.pack_start(logs_view_card, True, True, 0)
+
+        self._tab_logs_lbl = Gtk.Label(label="")
+        self.notebook.append_page(self.logs_tab, self._tab_logs_lbl)
+
+        # Aba 4: Sobre / About (nome, versão e créditos de código aberto)
         self.about_tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.about_tab.set_margin_top(6)
         self.about_tab.set_margin_bottom(12)
         self._tab_about_lbl = Gtk.Label(label="")
         self.notebook.append_page(self.about_tab, self._tab_about_lbl)
+        self.notebook.connect("switch-page", self._on_notebook_switch_page)
 
         self.apply_language()
 
     def select_tab(self, tab_name: str) -> None:
-        mapping = {"general": 0, "alerts": 1, "about": 2}
+        mapping = {"general": 0, "alerts": 1, "logs": 2, "about": 3}
         if tab_name in mapping:
             self.notebook.set_current_page(mapping[tab_name])
+            if tab_name == "logs":
+                self.refresh_logs()
+
+    def _on_notebook_switch_page(self, _nb: Gtk.Notebook, page: Gtk.Widget, _idx: int) -> None:
+        if page is self.logs_tab:
+            self.refresh_logs()
 
     def _populate_combos(
         self,
@@ -415,7 +485,45 @@ class SettingsPage(Gtk.Box):
             cfg = self.app_window.controller.config_store.load()
             self._tab_general_lbl.set_text(tr("settings.tab_general"))
             self._tab_alerts_lbl.set_text(tr("settings.tab_alerts"))
+            self._tab_logs_lbl.set_text(tr("settings.tab_logs"))
             self._tab_about_lbl.set_text(tr("settings.tab_about"))
+
+            self._logs_title_lbl.set_text(tr("settings.logs_title"))
+            self._logs_sub_lbl.set_text(tr("settings.logs_sub"))
+            self.logs_search_entry.set_placeholder_text(tr("settings.logs_search_ph"))
+            set_accessible(
+                self.logs_search_entry,
+                tr("settings.logs_search_a11y"),
+                tr("settings.logs_search_ph"),
+            )
+            self.refresh_logs_btn.set_label(tr("settings.logs_refresh_btn"))
+            set_accessible(
+                self.refresh_logs_btn,
+                tr("settings.logs_refresh_btn"),
+                tr("settings.logs_title"),
+            )
+            self.clear_logs_btn.set_label(tr("settings.logs_clear_btn"))
+            set_accessible(
+                self.clear_logs_btn,
+                tr("settings.logs_clear_btn"),
+                tr("settings.logs_clear_desc"),
+            )
+            self._logs_populating = True
+            try:
+                cur_lvl = self.logs_level_combo.get_active_id() or "all"
+                _repopulate_combo(
+                    self.logs_level_combo,
+                    (
+                        ("all", tr("settings.logs_level_all")),
+                        ("INFO", tr("settings.logs_level_info")),
+                        ("WARNING", tr("settings.logs_level_warn")),
+                        ("ERROR", tr("settings.logs_level_error")),
+                    ),
+                    cur_lvl,
+                )
+            finally:
+                self._logs_populating = False
+            set_accessible(self.logs_level_combo, tr("settings.logs_level_a11y"))
 
             self._lang_title_lbl.set_text(tr("settings.lang_title"))
             self._lang_sub_lbl.set_text(tr("settings.lang_sub"))
@@ -514,10 +622,47 @@ class SettingsPage(Gtk.Box):
             )
             self._last_theme_sig = (cfg.theme_mode, cfg.theme_preset)
             self._about_lang = None
+            self.refresh_logs()
             if self.get_mapped():
                 self._ensure_about_populated(cfg.language)
         finally:
             self._loading = False
+
+    def refresh_logs(self) -> None:
+        """Recarrega e filtra os logs operacionais exibidos na aba Logs."""
+        ctrl = self.app_window.controller
+        level_id = self.logs_level_combo.get_active_id() or "all"
+        level_filter = None if level_id == "all" else level_id
+        query = self.logs_search_entry.get_text() if hasattr(self, "logs_search_entry") else ""
+        entries = ctrl.list_app_logs(level=level_filter, query=query, limit=500)
+        total = ctrl.app_log.count()
+        self.logs_count_lbl.set_text(tr("settings.logs_count", count=total))
+        self.clear_logs_btn.set_sensitive(total > 0)
+        buf = self.logs_text_view.get_buffer()
+        if entries:
+            buf.set_text("\n".join(item.format_line() for item in entries))
+        else:
+            buf.set_text(tr("settings.logs_empty"))
+
+    def _on_clear_logs(self, *_args: object) -> None:
+        ctrl = self.app_window.controller
+        total = ctrl.app_log.count()
+        if total <= 0:
+            return
+        ok = ask_action_confirmation(
+            self.app_window,
+            title=tr("settings.logs_clear_confirm_title"),
+            summary=tr("settings.logs_clear_confirm_summary", count=total),
+            actor="NodusGuard",
+            evidence=tr("settings.logs_clear_confirm_evidence"),
+            confirm_label=tr("settings.logs_clear_confirm_btn"),
+            confirm_effect=tr("settings.logs_clear_confirm_effect"),
+            destructive=True,
+        )
+        if not ok:
+            return
+        ctrl.clear_app_logs()
+        self.refresh_logs()
 
     def _ensure_about_populated(self, lang: str) -> None:
         if self._about_lang == lang:
@@ -549,6 +694,7 @@ class SettingsPage(Gtk.Box):
             self.chk_grouped.set_active(cfg.notifications_grouped)
             self.chk_media.set_active(cfg.removable_media_prompt)
             self.chk_history.set_active(cfg.history_enabled)
+            self.refresh_logs()
         finally:
             self._loading = False
 

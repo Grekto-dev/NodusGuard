@@ -247,7 +247,7 @@ class ProtectionsPage(Gtk.Box):
     def _render_loading(self) -> None:
         if self.list_box.get_children():
             return
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         card.get_style_context().add_class("mintsec-card")
         card.pack_start(
             make_empty_state(
@@ -259,5 +259,9 @@ class ProtectionsPage(Gtk.Box):
             False,
             0,
         )
+        load_bar = Gtk.ProgressBar()
+        load_bar.get_style_context().add_class("mintsec-activity-progress")
+        load_bar.set_fraction(0.25)
+        card.pack_start(load_bar, False, False, 0)
         self.list_box.pack_start(card, False, False, 0)
         self.list_box.show_all()
