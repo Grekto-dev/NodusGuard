@@ -14,7 +14,6 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
-from mintsec.formatting import format_bytes, format_local_datetime  # noqa: E402
 from mintsec.services.antimalware import ScanResult  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.animations import format_eta  # noqa: E402
@@ -22,7 +21,7 @@ from mintsec_ui.dialogs.quarantine_restore import (  # noqa: E402
     confirm_quarantine,
     restore_quarantine_interactive,
 )
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_bytes, format_ui_datetime, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     clear_container,
     make_empty_state,
@@ -539,8 +538,8 @@ class ScansPage(Gtk.Box):
                     label=tr(
                         "scans.quar_meta",
                         path=item.original_path,
-                        date=format_local_datetime(item.quarantined_at),
-                        size=format_bytes(item.size_bytes),
+                        date=format_ui_datetime(item.quarantined_at),
+                        size=format_ui_bytes(item.size_bytes),
                     ),
                     xalign=0.0,
                 )
@@ -616,7 +615,7 @@ class ScansPage(Gtk.Box):
             self.app_window.controller.log_event(
                 "INFO",
                 "scans",
-                f"Varredura iniciada ({scope})",
+                tr("scans.log_started", scope=scope),
                 details=", ".join(custom_paths) if custom_paths else "",
                 source="clamscan",
             )
@@ -701,7 +700,7 @@ class ScansPage(Gtk.Box):
             self.app_window.controller.log_event(
                 "INFO",
                 "scans",
-                "Varredura pausada" if self._paused else "Varredura retomada",
+                tr("scans.log_paused") if self._paused else tr("scans.log_resumed"),
                 source="clamscan",
             )
         except Exception:  # noqa: BLE001
@@ -718,7 +717,7 @@ class ScansPage(Gtk.Box):
             if self._scanning:
                 self.progress_phase_lbl.set_text(tr("scans.phase_cancelling"))
                 try:
-                    self.app_window.controller.log_event("WARNING", "scans", "Varredura cancelada", source="clamscan")
+                    self.app_window.controller.log_event("WARNING", "scans", tr("scans.log_cancelled"), source="clamscan")
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -869,7 +868,7 @@ class ScansPage(Gtk.Box):
                 self.app_window.controller.log_event(
                     "ERROR",
                     "scans",
-                    "Falha na varredura ClamAV",
+                    tr("scans.log_failed"),
                     details=str(err or ""),
                     source="clamscan",
                 )

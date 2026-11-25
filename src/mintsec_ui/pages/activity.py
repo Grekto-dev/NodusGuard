@@ -9,11 +9,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_datetime, localize_text, tr  # noqa: E402
 from mintsec_ui.pages.recovery import populate_incident_cards  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
@@ -185,7 +185,7 @@ class ActivityPage(Gtk.Box):
 
                     info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
                     title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                    t_lbl = Gtk.Label(label=dec.title, xalign=0.0)
+                    t_lbl = Gtk.Label(label=localize_text(dec.title), xalign=0.0)
                     t_lbl.get_style_context().add_class("mintsec-subtitle")
                     title_row.pack_start(t_lbl, False, False, 0)
                     if dec.occurrences > 1:
@@ -197,7 +197,7 @@ class ActivityPage(Gtk.Box):
                         )
 
                     s_lbl = Gtk.Label(
-                        label=f"{friendly_module_name(dec.module_id, dec.module_id)} · {app_key} · {dec.evidence} · {format_local_datetime(dec.created_at)}",
+                        label=f"{friendly_module_name(dec.module_id, dec.module_id)} · {app_key} · {localize_text(dec.evidence)} · {format_ui_datetime(dec.created_at)}",
                         xalign=0.0,
                     )
                     s_lbl.set_line_wrap(True)
@@ -212,8 +212,8 @@ class ActivityPage(Gtk.Box):
                     rev_btn.set_valign(Gtk.Align.CENTER)
                     set_accessible(
                         rev_btn,
-                        tr("act.review_item_a11y", title=dec.title),
-                        dec.summary,
+                        tr("act.review_item_a11y", title=localize_text(dec.title)),
+                        localize_text(dec.summary),
                     )
                     rev_btn.connect(
                         "clicked",
@@ -303,7 +303,7 @@ class ActivityPage(Gtk.Box):
 
                 info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
                 top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                t_lbl = Gtk.Label(label=ev.action, xalign=0.0)
+                t_lbl = Gtk.Label(label=localize_text(ev.action), xalign=0.0)
                 t_lbl.get_style_context().add_class("mintsec-subtitle")
                 top.pack_start(t_lbl, False, False, 0)
                 top.pack_start(
@@ -317,7 +317,7 @@ class ActivityPage(Gtk.Box):
 
                 mod_label = friendly_module_name(ev.module_id, ev.module_id)
                 d_lbl = Gtk.Label(
-                    label=f"{mod_label} · {ev.reason} · {format_local_datetime(ev.timestamp)}",
+                    label=f"{mod_label} · {localize_text(ev.reason)} · {format_ui_datetime(ev.timestamp)}",
                     xalign=0.0,
                 )
                 d_lbl.set_line_wrap(True)

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from mintsec.formatting import format_bytes, format_local_datetime
 
 DEFAULT_LANGUAGE = "en"
 SUPPORTED_LANGUAGES = ("en", "pt_BR")
@@ -53,6 +56,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "mod.name.browsing": "Safe Browsing",
         "mod.name.isolation": "Protected Browser",
         "mod.name.rescue": "Emergency USB",
+        "mod.name.suite": "NodusGuard",
+        "manifest.antimalware.desc": "On-demand and scheduled scans with ClamAV and confirmed quarantine.",
+        "manifest.antimalware.engine": "ClamAV",
+        "manifest.firewall.desc": "UFW-controlled incoming rules and per-app outbound rules integrated with OpenSnitch.",
+        "manifest.firewall.engine": "UFW + OpenSnitch",
+        "manifest.recovery.desc": "System snapshots with Timeshift, encrypted personal backups with restic, and incident recovery.",
+        "manifest.recovery.engine": "Timeshift + restic",
+        "manifest.network.desc": "Local Wi-Fi inventory with NetworkManager and isolated ARP/DHCP helper.",
+        "manifest.network.engine": "NetworkManager + ARP/DHCP helper",
+        "manifest.browsing.desc": "Local DNS filtering against phishing, malware, and cryptomining with VPN preservation.",
+        "manifest.browsing.engine": "Local DNS filter (H5)",
+        "manifest.isolation.desc": "Mint updates, AppArmor profiles, Protected Browser (bubblewrap), and experimental Bank Mode.",
+        "manifest.isolation.engine": "AppArmor + bubblewrap",
+        "manifest.rescue.desc": "Verified rescue USB creation via UDisks2 with ClamAV, LUKS, and restic restore.",
+        "manifest.rescue.engine": "UDisks2 + signed live image",
+        "scans.log_started": "Scan started ({scope})",
+        "scans.log_paused": "Scan paused",
+        "scans.log_resumed": "Scan resumed",
+        "scans.log_cancelled": "Scan cancelled",
+        "scans.log_failed": "ClamAV scan failed",
         # Module taglines
         "mod.tagline.antimalware": "Scans your files for threats.",
         "mod.tagline.firewall": "Blocks unwanted access to your computer.",
@@ -964,6 +987,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "mod.name.browsing": "Navegação segura",
         "mod.name.isolation": "Navegador protegido",
         "mod.name.rescue": "Pendrive de emergência",
+        "mod.name.suite": "NodusGuard",
+        "manifest.antimalware.desc": "Verificações sob demanda e agendadas com ClamAV e quarentena com confirmação.",
+        "manifest.antimalware.engine": "ClamAV",
+        "manifest.firewall.desc": "Entrada controlada por UFW e saída por aplicativo integrada com OpenSnitch na fase contínua.",
+        "manifest.firewall.engine": "UFW + OpenSnitch",
+        "manifest.recovery.desc": "Pontos do sistema com Timeshift, cópias pessoais cifradas com restic e recuperação de incidentes.",
+        "manifest.recovery.engine": "Timeshift + restic",
+        "manifest.network.desc": "Inventário da rede Wi-Fi local com NetworkManager e auxiliar isolado ARP/DHCP.",
+        "manifest.network.engine": "NetworkManager + auxiliar ARP/DHCP",
+        "manifest.browsing.desc": "Filtro DNS local contra phishing, malware e mineração com preservação de VPN.",
+        "manifest.browsing.engine": "Filtro DNS local (H5)",
+        "manifest.isolation.desc": "Atualizações do Mint, perfis AppArmor, Navegador Isolado (bubblewrap) e Modo Banco experimental.",
+        "manifest.isolation.engine": "AppArmor + bubblewrap",
+        "manifest.rescue.desc": "Criação de USB de resgate verificado via UDisks2 com ClamAV, LUKS e restauração restic.",
+        "manifest.rescue.engine": "UDisks2 + imagem live assinada",
+        "scans.log_started": "Varredura iniciada ({scope})",
+        "scans.log_paused": "Varredura pausada",
+        "scans.log_resumed": "Varredura retomada",
+        "scans.log_cancelled": "Varredura cancelada",
+        "scans.log_failed": "Falha na varredura ClamAV",
         # Descrições curtas dos módulos
         "mod.tagline.antimalware": "Verifica seus arquivos contra ameaças.",
         "mod.tagline.firewall": "Bloqueia acessos indesejados ao computador.",
@@ -1857,3 +1900,214 @@ def tr(key: str, **kwargs: Any) -> str:
     if kwargs:
         return template.format(**kwargs)
     return template
+
+
+_PT_TO_EN_EXACT: dict[str, str] = {
+    "Não instalado": "Not installed",
+    "Pacote instalado localmente": "Installed locally",
+    "Pacote local": "Local package",
+    "Desativado por você": "Disabled by you",
+    "Ativo": "Active",
+    "Verificação incompleta": "Incomplete scan",
+    "Estado indisponível": "Status unavailable",
+    "Módulo instalado, sem rotina contínua ou agenda habilitada.": "Package installed, with no background routine or schedule enabled.",
+    "Varredura sem privilégios pronta e assinaturas em dia.": "Unprivileged scanning ready and virus definitions up to date.",
+    "Assinaturas de vírus ausentes.": "Virus definitions are missing.",
+    "Firewall de entrada desligado.": "Incoming firewall is turned off.",
+    "Firewall UFW ativo com proteção de entrada e saída monitorada.": "UFW firewall active with incoming protection and outbound monitoring.",
+    "Firewall desabilitado; nenhuma regra da suíte está aplicada no momento.": "Firewall disabled; no NodusGuard rules are currently applied.",
+    "Exceção local ativa": "Active local exception",
+    "Pública/Outra": "Public/Other",
+    "sem conexão": "no connection",
+    "Observação passiva desativada.": "Passive observation disabled.",
+    "Filtro DNS local desativado.": "Local DNS filter disabled.",
+    "Permanece experimental até conclusão da homologação gráfica H7.": "Remains experimental until H7 graphical verification is completed.",
+    "Instale bubblewrap para habilitar o Navegador Isolado.": "Install bubblewrap to enable Protected Browser.",
+    "bubblewrap não instalado": "bubblewrap not installed",
+    "Aviso do modelo de segurança do X11: na mesma sessão gráfica X11, outros aplicativos do mesmo usuário podem observar eventos de teclado e janela. Para isolamento de sessão gráfica separada, o Modo Banco permanece experimental até H7.": (
+        "X11 security model notice: within the same X11 graphical session, other apps running as the same user can observe keyboard and window events. "
+        "For separate graphical session isolation, Bank Mode remains experimental until H7."
+    ),
+    "Configuração automática de rede (DHCP)": "Automatic network setup (DHCP)",
+    "Mantém o recebimento de endereço IP pelo roteador.": "Keeps router IP address assignment working.",
+    "Resolução de nomes (DNS)": "Domain name resolution (DNS)",
+    "Permite consultar endereços na internet e na rede local.": "Allows looking up addresses on the internet and local network.",
+    "Descoberta local de impressoras (mDNS)": "Local printer discovery (mDNS)",
+    "Mantém descoberta básica na rede local quando habilitada.": "Keeps basic local network discovery working when enabled.",
+    "Túneis VPN (WireGuard / OpenVPN)": "VPN tunnels (WireGuard / OpenVPN)",
+    "Evita bloqueio de conexões VPN configuradas pelo usuário.": "Prevents blocking user-configured VPN connections.",
+    "Aguardando decisão": "Pending decision",
+    "Permitir a próxima tentativa": "Allow next attempt",
+    "Lembrar esta versão": "Remember this version",
+    "Confiar também nas atualizações deste pacote": "Also trust updates from this package",
+    "Antivírus ativado": "Antivirus enabled",
+    "Verificações sob demanda e agendadas habilitadas.": "On-demand and scheduled scans enabled.",
+    "Antivírus desativado": "Antivirus disabled",
+    "Firewall de entrada ativado": "Incoming firewall enabled",
+    "UFW ativado com visualização prévia de regras essenciais.": "UFW enabled with essential rules preview.",
+    "Firewall desativado": "Firewall disabled",
+    "Regras criadas pela suíte revertidas; regras externas preservadas.": "Rules created by NodusGuard were reverted; external rules preserved.",
+    "Regras existentes mantidas no sistema.": "Existing system rules kept.",
+    "Filtro DNS local ativado": "Local DNS filter enabled",
+    "Filtro local habilitado pelo serviço administrativo.": "Local DNS filter enabled by the system service.",
+    "Filtro DNS local desativado": "Local DNS filter disabled",
+    "Configuração DNS anterior restaurada.": "Previous DNS configuration restored.",
+    "Filtro pausado.": "Filter paused.",
+    "Proteção pausada": "Protection paused",
+    "Proteção retomada": "Protection resumed",
+    "Monitoramento e varreduras periódicas reativados.": "Background monitoring and scheduled scans re-enabled.",
+    "Atualização de assinaturas ClamAV": "ClamAV signature update",
+    "Atualização de definições ClamAV concluída": "ClamAV definitions update completed",
+    "Falha ao atualizar definições ClamAV": "Failed to update ClamAV definitions",
+    "FreshClam concluído com sucesso.": "FreshClam completed successfully.",
+    "Recomendações aplicadas automaticamente": "Recommendations applied automatically",
+    "Varredura pausada": "Scan paused",
+    "Varredura retomada": "Scan resumed",
+    "Varredura cancelada": "Scan cancelled",
+    "Falha na varredura ClamAV": "ClamAV scan failed",
+    "Configuração de antivírus atualizada": "Antivirus settings updated",
+    "Preferências de pastas, exceções ou limites salvas.": "Folder, exclusion, or limit preferences saved.",
+    "Regra de firewall revogada": "Firewall rule revoked",
+    "Perfil de aplicativo permitido no firewall.": "Application profile allowed in firewall.",
+    "Aplicativo retomado": "Application resumed",
+    "Usuário autorizou a retomada do aplicativo pausado.": "User approved resuming the paused application.",
+    "Falha ao atualizar status das proteções": "Failed to refresh protection status",
+    "Redes com isolamento de clientes bloqueiam ARP/tráfego direto entre aparelhos; apenas o roteador e anúncios recebidos permanecem visíveis.": (
+        "Client-isolated Wi-Fi networks block direct ARP/device traffic; only the router and received announcements remain visible."
+    ),
+    "Timeshift e restic não instalados": "Timeshift and restic not installed",
+    "NetworkManager não encontrado": "NetworkManager not found",
+    "UDisks2 não instalado": "UDisks2 not installed",
+    "Pacote udisks2 necessário para abertura exclusiva de mídia USB.": "Package udisks2 is required for exclusive USB media opening.",
+    "Pacote do módulo não instalado.": "Module package not installed.",
+    "Pacotes clamav/clamav-freshclam ausentes.": "Packages clamav/clamav-freshclam are missing.",
+    "Pacotes timeshift e restic ausentes.": "Packages timeshift and restic are missing.",
+    "Pacote ufw não encontrado.": "Package ufw not found.",
+    "Pacote network-manager ausente.": "Package network-manager is missing.",
+    "Nenhum motor DNS local instalado.": "No local DNS engine installed.",
+    "Escolha o destino das cópias pessoais em Recuperação.": "Choose your personal backup destination in Recovery.",
+    "Repositório configurado, rotina automática desabilitada.": "Repository configured; scheduled backups disabled.",
+    "Instale o pacote restic para habilitar cópias pessoais cifradas.": "Install the restic package to enable encrypted personal backups.",
+    "Nenhum destino configurado para as cópias pessoais.": "No destination configured for personal backups.",
+    "Última cópia fora do intervalo da agenda configurada.": "Last backup is older than the configured schedule.",
+    "Cópia pessoal recente disponível para restauração.": "Recent personal backup available for restore.",
+    "Ative para observar dispositivos na rede local.": "Enable to observe devices on your local network.",
+    "Ative para filtrar domínios de phishing, malware e mineração.": "Enable to filter phishing, malware, and cryptomining domains.",
+    "Proteção contra gravação em disco de sistema, swap, LUKS, LVM e RAID ativa.": "Write protection for system disks, swap, LUKS, LVM, and RAID is active.",
+    "Rede local": "Local network",
+    "Sistema": "System",
+    "Externa": "External",
+    "Essencial": "Essential",
+    "Qualquer": "Any",
+    "Permanente": "Permanent",
+    "Sem registro": "No record",
+}
+
+_EN_TO_PT_EXACT: dict[str, str] = {v: k for k, v in _PT_TO_EN_EXACT.items()}
+
+_PT_TO_EN_PATTERNS: tuple[tuple[re.Pattern[str], Any], ...] = (
+    (re.compile(r"^Pacote instalado localmente \((.+)\)$"), lambda m: f"Installed locally ({m.group(1)})"),
+    (re.compile(r"^Pacote local \((.+)\)$"), lambda m: f"Local package ({m.group(1)})"),
+    (re.compile(r"^Assinaturas desatualizadas \((.+)\)\.$"), lambda m: f"Virus definitions outdated ({m.group(1)})."),
+    (re.compile(r"^Módulo ativado: (.+)$"), lambda m: f"Module enabled: {m.group(1)}"),
+    (re.compile(r"^Módulo desativado: (.+)$"), lambda m: f"Module disabled: {m.group(1)}"),
+    (re.compile(r"^Proteção pausada \((.+)\)$"), lambda m: f"Protection paused ({m.group(1)})"),
+    (re.compile(r"^Modo: (.+)$"), lambda m: f"Mode: {m.group(1)}"),
+    (re.compile(r"^Aplicativo liberado no firewall: (.+)$"), lambda m: f"App allowed in firewall: {m.group(1)}"),
+    (re.compile(r"^Permissão de firewall removida: (.+)$"), lambda m: f"Firewall permission removed: {m.group(1)}"),
+    (re.compile(r"^Permissão de aplicativo removida: (.+)$"), lambda m: f"App firewall permission removed: {m.group(1)}"),
+    (re.compile(r"^Porta\(s\) liberada\(s\) para (.+)$"), lambda m: f"Port(s) allowed for {m.group(1)}"),
+    (re.compile(r"^Portas (.+) \(qualquer origem\)\.$"), lambda m: f"Ports {m.group(1)} (any source)."),
+    (re.compile(r"^Portas (.+) \((.+)\)\.$"), lambda m: f"Ports {m.group(1)} ({m.group(2)})."),
+    (re.compile(r"^Perfil UFW liberado: (.+)$"), lambda m: f"UFW profile allowed: {m.group(1)}"),
+    (re.compile(r"^Regra (.+) removida\.$"), lambda m: f"Rule {m.group(1)} removed."),
+    (re.compile(r"^(\d+) regra\(s\) removida\(s\)\.$"), lambda m: f"{m.group(1)} rule(s) removed."),
+    (re.compile(r"^Exceção aplicada \(qualquer origem\)\.$"), lambda _m: "Exception applied (any source)."),
+    (re.compile(r"^Exceção aplicada \((.+)\)\.$"), lambda m: f"Exception applied ({m.group(1)})."),
+    (re.compile(r"^Aplicadas: (.+)\.$"), lambda m: f"Applied: {m.group(1)}."),
+    (re.compile(r"^Recomendações aplicadas: (\d+) \(falhas: (\d+)\)$"), lambda m: f"Recommendations applied: {m.group(1)} (failed: {m.group(2)})"),
+    (re.compile(r"^Falha ao aplicar recomendação (.+)$"), lambda m: f"Failed to apply recommendation {m.group(1)}"),
+    (re.compile(r"^Varredura iniciada \((.+)\)$"), lambda m: f"Scan started ({m.group(1)})"),
+    (re.compile(r"^Falha FreshClam: (.+)$"), lambda m: f"FreshClam error: {m.group(1)}"),
+    (re.compile(r"^(\d+) perfis AppArmor em aplicação$"), lambda m: f"{m.group(1)} AppArmor profile(s) enforcing"),
+    (re.compile(r"^AppArmor presente$"), lambda _m: "AppArmor present"),
+    (re.compile(r"^Navegador Isolado pronto · (.+) · Modo Banco experimental$"), lambda m: f"Protected Browser ready · {localize_text(m.group(1), 'en')} · experimental Bank Mode"),
+    (
+        re.compile(r"^(\d+) disco\(s\)/partição\(ões\) protegidos · (\d+) mídia\(s\) USB segura\(s\) · (.+)$"),
+        lambda m: f"{m.group(1)} protected disk(s)/partition(s) · {m.group(2)} safe USB drive(s) · {localize_text(m.group(3), 'en')}",
+    ),
+    (re.compile(r"^Aguardando homologação H7$"), lambda _m: "Pending H7 graphical approval"),
+    (re.compile(r"^Observação passiva na interface (.+)$"), lambda m: f"Passive observation on interface {localize_text(m.group(1), 'en')}"),
+    (re.compile(r"^(.+) · Proteção contra gravação em disco de sistema, swap, LUKS, LVM e RAID ativa\.$"), lambda m: f"{m.group(1)} · Write protection for system disks, swap, LUKS, LVM, and RAID is active."),
+    (re.compile(r"^Alvos: (.+)$"), lambda m: f"Targets: {m.group(1)}"),
+    (re.compile(r"^Assinatura: (.+)$"), lambda m: f"Detection: {m.group(1)}"),
+    (re.compile(r"^Origem: (.+)$"), lambda m: f"Source: {m.group(1)}"),
+    (re.compile(r"^(.+): (.+) -> ok$"), lambda m: f"{localize_text(m.group(1), 'en')} -> ok"),
+    (re.compile(r"^(.+): error$"), lambda m: f"{localize_text(m.group(1), 'en')}: error"),
+)
+
+_EN_TO_PT_PATTERNS: tuple[tuple[re.Pattern[str], Any], ...] = (
+    (re.compile(r"^Module enabled: (.+)$"), lambda m: f"Módulo ativado: {m.group(1)}"),
+    (re.compile(r"^Module disabled: (.+)$"), lambda m: f"Módulo desativado: {m.group(1)}"),
+    (re.compile(r"^Protection paused \((.+)\)$"), lambda m: f"Proteção pausada ({m.group(1)})"),
+    (re.compile(r"^App allowed in firewall: (.+)$"), lambda m: f"Aplicativo liberado no firewall: {m.group(1)}"),
+    (re.compile(r"^Scan started \((.+)\)$"), lambda m: f"Varredura iniciada ({m.group(1)})"),
+)
+
+
+def localize_text(text: str | None, lang: str | None = None) -> str:
+    """Traduz textos vindos do backend/histórico para o idioma ativo da interface."""
+    if text is None:
+        return ""
+    raw = str(text)
+    if not raw.strip():
+        return raw
+    target_lang = lang or _current_language
+    is_pt = str(target_lang).lower().startswith("pt")
+    if is_pt:
+        if raw in _EN_TO_PT_EXACT:
+            return _EN_TO_PT_EXACT[raw]
+        for pat, fn in _EN_TO_PT_PATTERNS:
+            m = pat.match(raw)
+            if m is not None:
+                return fn(m)
+        return raw
+
+    if raw in _PT_TO_EN_EXACT:
+        return _PT_TO_EN_EXACT[raw]
+    for pat, fn in _PT_TO_EN_PATTERNS:
+        m = pat.match(raw)
+        if m is not None:
+            return fn(m)
+    if " · " in raw:
+        parts = [localize_text(part.strip(), target_lang) for part in raw.split(" · ")]
+        return " · ".join(parts)
+    return raw
+
+
+def localize_log_entry(entry: Any, lang: str | None = None) -> str:
+    """Formata AppLogEntry garantindo mensagem e detalhes no idioma ativo."""
+    target_lang = lang or _current_language
+    ts_clean = str(getattr(entry, "timestamp", "")).replace("T", " ")
+    if "+" in ts_clean:
+        ts_clean = ts_clean.split("+", 1)[0]
+    level = str(getattr(entry, "level", "INFO"))
+    category = str(getattr(entry, "category", "app"))
+    source = str(getattr(entry, "source", "") or "")
+    src_part = f" · {source}" if source else ""
+    msg = localize_text(getattr(entry, "message", ""), target_lang)
+    details = localize_text(getattr(entry, "details", ""), target_lang)
+    head = f"[{ts_clean}] [{level}] [{category}{src_part}] {msg}"
+    if details:
+        return f"{head}\n    {details}"
+    return head
+
+
+def format_ui_datetime(value: Any) -> str:
+    """Formata data/hora local conforme o idioma ativo da interface."""
+    return format_local_datetime(value, lang=_current_language)
+
+
+def format_ui_bytes(size: int) -> str:
+    """Formata tamanho de arquivo conforme o idioma ativo da interface."""
+    return format_bytes(size, lang=_current_language)

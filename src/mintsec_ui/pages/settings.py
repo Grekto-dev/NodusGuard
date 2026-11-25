@@ -12,7 +12,7 @@ from gi.repository import Gtk  # noqa: E402
 from mintsec import APP_NAME, __version__  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import get_language, tr  # noqa: E402
+from mintsec_ui.i18n import get_language, localize_log_entry, tr  # noqa: E402
 from mintsec_ui.widgets import clear_container, make_illustration, make_pill  # noqa: E402
 
 
@@ -640,7 +640,7 @@ class SettingsPage(Gtk.Box):
         self.clear_logs_btn.set_sensitive(total > 0)
         buf = self.logs_text_view.get_buffer()
         if entries:
-            buf.set_text("\n".join(item.format_line() for item in entries))
+            buf.set_text("\n".join(localize_log_entry(item) for item in entries))
         else:
             buf.set_text(tr("settings.logs_empty"))
 

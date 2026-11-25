@@ -13,12 +13,12 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gtk, Pango  # noqa: E402
 
 from mintsec.contracts import ModuleState  # noqa: E402
-from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.actions import handle_module_switch, run_ui_task, trigger_module_install  # noqa: E402
 from mintsec_ui.animations import ProtectionStatusCanvas  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_datetime, localize_text, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
     clear_container,
@@ -436,8 +436,8 @@ class HomePage(Gtk.Box):
         last_scan_ts = str(last_scan_info.get("finished_at") or "")
         db_updated_ts = str(sig_info.get("updated_at") or "")
 
-        scan_display = format_local_datetime(last_scan_ts) if last_scan_ts else tr("home.last_scan_never")
-        db_display = format_local_datetime(db_updated_ts) if db_updated_ts else tr("home.last_db_never")
+        scan_display = format_ui_datetime(last_scan_ts) if last_scan_ts else tr("home.last_scan_never")
+        db_display = format_ui_datetime(db_updated_ts) if db_updated_ts else tr("home.last_db_never")
         self.last_scan_val_lbl.set_text(f"{tr('home.last_scan_label')} {scan_display}")
         self.last_db_val_lbl.set_text(f"{tr('home.last_db_label')} {db_display}")
 
@@ -447,7 +447,7 @@ class HomePage(Gtk.Box):
         if health == "paused":
             headline = tr("home.status_paused_title")
             mode = cfg.protection_pause_mode
-            until_fmt = format_local_datetime(cfg.protection_paused_until) if cfg.protection_paused_until else ""
+            until_fmt = format_ui_datetime(cfg.protection_paused_until) if cfg.protection_paused_until else ""
             if mode == "timed" and until_fmt:
                 subtitle = tr("home.status_paused_sub_until", until=until_fmt)
             elif mode == "until_restart":
@@ -694,9 +694,9 @@ class HomePage(Gtk.Box):
         else:
             for ev in events:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                t_lbl = Gtk.Label(label=ev.action, xalign=0.0)
+                t_lbl = Gtk.Label(label=localize_text(ev.action), xalign=0.0)
                 t_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-                dt_lbl = Gtk.Label(label=format_local_datetime(ev.timestamp), xalign=1.0)
+                dt_lbl = Gtk.Label(label=format_ui_datetime(ev.timestamp), xalign=1.0)
                 dt_lbl.get_style_context().add_class("mintsec-muted")
                 row.pack_start(t_lbl, True, True, 0)
                 row.pack_start(dt_lbl, False, False, 0)

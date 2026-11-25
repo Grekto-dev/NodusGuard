@@ -5,6 +5,14 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-11-25
+
+### Fixed
+- **Full Bilingual Language Consistency (`en` / `pt_BR`)**:
+  - Made date/time and binary size formatters (`format_local_datetime`, `format_confirmed_at`, `format_bytes`) language-aware and wired UI helpers (`format_ui_datetime`, `format_ui_bytes`) across Home, Scans, Quarantine, Recovery, Activity, Notifications, and Module Detail pages.
+  - Added localized descriptions and engine names (`manifest.<id>.desc`, `manifest.<id>.engine`) plus bidirectional text/log translation (`localize_text`, `localize_log_entry`) covering package origins, backend evidence/mode strings, essential firewall rule previews, OpenSnitch choice labels, X11/Bank Mode notices, history actions/reasons, and Settings → Logs entries.
+  - Added automated Xephyr zero-leak regression tests (`tests/test_language_isolation.py`) ensuring zero Portuguese text leaks when running in English and clean live switching.
+
 ## [0.2.4] - 2026-11-25
 
 ### Added

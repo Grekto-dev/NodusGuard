@@ -10,11 +10,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from mintsec.contracts import ModuleState  # noqa: E402
-from mintsec.formatting import format_error_message, format_local_datetime  # noqa: E402
+from mintsec.formatting import format_error_message  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import get_language, tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_datetime, get_language, localize_text, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     MODULE_ICONS,
     clear_container,
@@ -137,14 +137,18 @@ class ModuleDetailPage(Gtk.Box):
         tech_exp.get_style_context().add_class("mintsec-expander")
         set_accessible(tech_exp, tr("detail.tech_expander"), tr("detail.tech_desc"))
         ver_str = f" ({st.installed_version})" if st.installed_version else ""
+        desc_key = f"manifest.{mod_id}.desc"
+        eng_key = f"manifest.{mod_id}.engine"
+        desc_txt = tr(desc_key)
+        eng_txt = tr(eng_key)
         meta = Gtk.Label(
             label=tr(
                 "detail.tech_body",
-                desc=manifest.short_description,
-                engine=manifest.engine.get("name"),
-                origin=st.package_origin,
+                desc=desc_txt if desc_txt != desc_key else manifest.short_description,
+                engine=eng_txt if eng_txt != eng_key else manifest.engine.get("name"),
+                origin=localize_text(st.package_origin),
                 ver=ver_str,
-                evidence=st.evidence,
+                evidence=localize_text(st.evidence),
             ),
             xalign=0.0,
         )
@@ -206,7 +210,7 @@ class ModuleDetailPage(Gtk.Box):
         card.get_style_context().add_class("mintsec-card")
         sig = st.details.get("signatures", {})
         sig_text = (
-            tr("detail.am_sigs_ok", ts=format_local_datetime(sig.get("updated_at")))
+            tr("detail.am_sigs_ok", ts=format_ui_datetime(sig.get("updated_at")))
             if sig.get("available")
             else tr("detail.am_sigs_missing")
         )
@@ -268,7 +272,7 @@ class ModuleDetailPage(Gtk.Box):
         in_card.pack_start(preview_hdr, False, False, 0)
         for rule in st.details.get("essential_rules", []):
             rl = Gtk.Label(
-                label=f"{rule['title']} ({rule['port_proto']}) — {rule['reason']}",
+                label=f"{localize_text(rule['title'])} ({rule['port_proto']}) — {localize_text(rule['reason'])}",
                 xalign=0.0,
             )
             rl.set_line_wrap(True)
@@ -615,7 +619,7 @@ class ModuleDetailPage(Gtk.Box):
 
         labels = st.details.get("contract_labels", {})
         contract_lbl = Gtk.Label(
-            label=tr("detail.fw_first_conn", choices=" · ".join(labels.values())),
+            label=tr("detail.fw_first_conn", choices=" · ".join(localize_text(v) for v in labels.values())),
             xalign=0.0,
         )
         contract_lbl.set_line_wrap(True)
@@ -629,7 +633,7 @@ class ModuleDetailPage(Gtk.Box):
                     "detail.fw_denied_line",
                     app=denial["app_name"],
                     dest=denial["destination"],
-                    reason=denial["reason"],
+                    reason=localize_text(denial["reason"]),
                 ),
                 xalign=0.0,
             )
@@ -696,7 +700,7 @@ class ModuleDetailPage(Gtk.Box):
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 src_note = f" (LAN {r['source_cidr']})" if r.get("source_cidr") else ""
                 r_lbl = Gtk.Label(
-                    label=f"{r['direction'].upper()} {r['action']} {r['target']}{src_note} — {r['scope']}",
+                    label=f"{r['direction'].upper()} {r['action']} {r['target']}{src_note} — {localize_text(r['scope'])}",
                     xalign=0.0,
                 )
                 r_lbl.set_line_wrap(True)
@@ -735,8 +739,8 @@ class ModuleDetailPage(Gtk.Box):
             label=tr(
                 "detail.rec_summary",
                 repo=cfg.get("repo_path") or tr("detail.rec_not_set"),
-                bk=format_local_datetime(cfg.get("last_backup_at")),
-                tst=format_local_datetime(cfg.get("last_restore_test_at")),
+                bk=format_ui_datetime(cfg.get("last_backup_at")),
+                tst=format_ui_datetime(cfg.get("last_restore_test_at")),
             ),
             xalign=0.0,
         )
@@ -781,7 +785,7 @@ class ModuleDetailPage(Gtk.Box):
             iso_box.get_style_context().add_class("mintsec-callout")
             iso_box.get_style_context().add_class("mintsec-callout-warn")
             iso_lbl = Gtk.Label(
-                label=st.details.get("isolation_explanation") or tr("detail.net_iso_fallback"),
+                label=localize_text(st.details.get("isolation_explanation")) or tr("detail.net_iso_fallback"),
                 xalign=0.0,
             )
             iso_lbl.set_line_wrap(True)
@@ -881,7 +885,7 @@ class ModuleDetailPage(Gtk.Box):
             w_box.get_style_context().add_class("mintsec-callout")
             w_box.get_style_context().add_class("mintsec-callout-warn")
             w_lbl = Gtk.Label(
-                label=tr("detail.brow_warn", browser=w["browser"], detail=w["detail"]),
+                label=tr("detail.brow_warn", browser=w["browser"], detail=localize_text(w["detail"])),
                 xalign=0.0,
             )
             w_lbl.set_line_wrap(True)
@@ -903,7 +907,7 @@ class ModuleDetailPage(Gtk.Box):
 
         def _on_reason(_b: Gtk.Button) -> None:
             info = self.app_window.controller.browsing.lookup_block_origin(dom_entry.get_text())
-            feedback.set_text(f"{info['domain']}: {info['origin']}")
+            feedback.set_text(f"{info['domain']}: {localize_text(info['origin'])}")
 
         def _on_exc(_b: Gtk.Button) -> None:
             try:
@@ -931,8 +935,8 @@ class ModuleDetailPage(Gtk.Box):
             label=tr(
                 "detail.iso_summary",
                 count=aa.get("enforce_count", 0),
-                x11=st.details.get("x11_warning", ""),
-                bank=bank.get("status_note", tr("detail.iso_bank_fallback")),
+                x11=localize_text(st.details.get("x11_warning", "")),
+                bank=localize_text(bank.get("status_note", tr("detail.iso_bank_fallback"))),
             ),
             xalign=0.0,
         )

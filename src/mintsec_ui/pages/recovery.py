@@ -10,10 +10,9 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from mintsec.formatting import format_bytes, format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_bytes, format_ui_datetime, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     clear_container,
     make_empty_state,
@@ -55,7 +54,7 @@ def populate_incident_cards(
                     "rec.inc_row",
                     iid=rep.incident_id,
                     count=len(rep.items),
-                    size=format_bytes(rep.total_bytes),
+                    size=format_ui_bytes(rep.total_bytes),
                     path=rep.incident_dir,
                 ),
                 xalign=0.0,
@@ -375,10 +374,14 @@ class RecoveryPage(Gtk.Box):
             self.repo_type_combo.set_active_id(restic_cfg.get("repo_type", "removable_offline"))
             self.sep_cred_check.set_active(bool(restic_cfg.get("separate_maintenance_credential", False)))
 
-            last_bk = format_local_datetime(restic_cfg.get("last_backup_at"))
-            last_tst = format_local_datetime(restic_cfg.get("last_restore_test_at"))
+            last_bk = (
+                format_ui_datetime(restic_cfg.get("last_backup_at"))
+                if restic_cfg.get("last_backup_at")
+                else tr("rec.last_backup_never")
+            )
+            last_tst = format_ui_datetime(restic_cfg.get("last_restore_test_at"))
             tst_res = restic_cfg.get("last_restore_test_result") or tr("rec.last_test_never")
-            self.last_bk_lbl.set_text(last_bk or tr("rec.last_backup_never"))
+            self.last_bk_lbl.set_text(last_bk)
             self.last_tst_lbl.set_text(f"{last_tst} · {tst_res}" if restic_cfg.get("last_restore_test_at") else tst_res)
             self._refresh_timeshift(st.details.get("timeshift", {}), lang)
         else:
@@ -394,7 +397,7 @@ class RecoveryPage(Gtk.Box):
                 self.app_window,
                 controller,
                 on_cleaned=lambda freed: self.files_feedback.set_text(
-                    tr("rec.inc_cleaned_msg", size=format_bytes(freed))
+                    tr("rec.inc_cleaned_msg", size=format_ui_bytes(freed))
                 ),
             )
 
@@ -502,7 +505,7 @@ class RecoveryPage(Gtk.Box):
             for c in safe:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
                 lbl = Gtk.Label(
-                    label=f"{c['model']} ({format_bytes(c['size_bytes'])}) — {c['path']} [{c.get('serial') or c.get('wwn')}]",
+                    label=f"{c['model']} ({format_ui_bytes(c['size_bytes'])}) — {c['path']} [{c.get('serial') or c.get('wwn')}]",
                     xalign=0.0,
                 )
                 lbl.set_line_wrap(True)
@@ -548,7 +551,7 @@ class RecoveryPage(Gtk.Box):
             summary=tr(
                 "rec.usb_confirm_summary",
                 model=cand_dict["model"],
-                size=format_bytes(cand_dict["size_bytes"]),
+                size=format_ui_bytes(cand_dict["size_bytes"]),
                 path=cand_dict["path"],
             ),
             actor=tr("rec.usb_confirm_actor"),
@@ -575,7 +578,7 @@ class RecoveryPage(Gtk.Box):
                 use_udisks2=True,
             )
             self.files_feedback.set_text(
-                tr("rec.usb_done_msg", size=format_bytes(res["bytes_written"]), sha=res["sha256"][:12])
+                tr("rec.usb_done_msg", size=format_ui_bytes(res["bytes_written"]), sha=res["sha256"][:12])
             )
         except Exception as exc:
             self.files_feedback.set_text(tr("rec.usb_fail_msg", err=exc))
@@ -638,7 +641,7 @@ class RecoveryPage(Gtk.Box):
             res = self.app_window.controller.recovery.backup_now(password=pw)
             self.app_window.controller.invalidate_cache("recovery")
             self.files_feedback.set_text(
-                tr("rec.backup_done_msg", ts=format_local_datetime(res.get("completed_at")))
+                tr("rec.backup_done_msg", ts=format_ui_datetime(res.get("completed_at")))
             )
             self.app_window.refresh_all(force=True)
         except Exception as exc:
@@ -652,7 +655,7 @@ class RecoveryPage(Gtk.Box):
             res = self.app_window.controller.recovery.test_restore(password=pw)
             self.app_window.controller.invalidate_cache("recovery")
             self.files_feedback.set_text(
-                tr("rec.test_done_msg", ts=format_local_datetime(res.get("tested_at")), res=res.get("result"))
+                tr("rec.test_done_msg", ts=format_ui_datetime(res.get("tested_at")), res=res.get("result"))
             )
             self.app_window.refresh_all(force=True)
         except Exception as exc:

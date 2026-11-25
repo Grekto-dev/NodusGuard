@@ -10,11 +10,10 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from mintsec.formatting import format_bytes, format_local_datetime  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.dialogs.quarantine_restore import restore_quarantine_interactive  # noqa: E402
-from mintsec_ui.i18n import tr  # noqa: E402
+from mintsec_ui.i18n import format_ui_bytes, format_ui_datetime, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
     clear_container,
     make_empty_state,
@@ -97,8 +96,8 @@ class QuarantinePage(Gtk.Box):
             label=tr(
                 "scans.quar_meta",
                 path=item.original_path,
-                date=format_local_datetime(item.quarantined_at),
-                size=format_bytes(item.size_bytes),
+                date=format_ui_datetime(item.quarantined_at),
+                size=format_ui_bytes(item.size_bytes),
             ),
             xalign=0.0,
         )

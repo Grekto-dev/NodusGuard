@@ -27,24 +27,31 @@ def parse_timestamp(value: str | datetime | None) -> datetime | None:
     return dt.astimezone()
 
 
-def format_local_datetime(value: str | datetime | None) -> str:
-    """Formata data e hora locais absolutas no padrão '21/11/2026 às 14:32'."""
+def format_local_datetime(value: str | datetime | None, *, lang: str = "pt_BR") -> str:
+    """Formata data e hora locais absolutas no idioma solicitado."""
+    is_pt = str(lang or "pt_BR").lower().startswith("pt")
     dt = parse_timestamp(value)
     if dt is None:
-        return "Sem registro"
-    return f"{dt:%d/%m/%Y} às {dt:%H:%M}"
+        return "Sem registro" if is_pt else "No record"
+    if is_pt:
+        return f"{dt:%d/%m/%Y} às {dt:%H:%M}"
+    return f"{dt:%Y-%m-%d %H:%M}"
 
 
-def format_confirmed_at(value: str | datetime | None) -> str:
-    """Formata evidência temporal no padrão 'Confirmado em DD/MM/AAAA às HH:MM'."""
+def format_confirmed_at(value: str | datetime | None, *, lang: str = "pt_BR") -> str:
+    """Formata evidência temporal no idioma solicitado."""
+    is_pt = str(lang or "pt_BR").lower().startswith("pt")
     dt = parse_timestamp(value)
     if dt is None:
-        return "Sem confirmação recente"
-    return f"Confirmado em {dt:%d/%m/%Y} às {dt:%H:%M}"
+        return "Sem confirmação recente" if is_pt else "No recent confirmation"
+    if is_pt:
+        return f"Confirmado em {dt:%d/%m/%Y} às {dt:%H:%M}"
+    return f"Confirmed on {dt:%Y-%m-%d %H:%M}"
 
 
-def format_bytes(size: int) -> str:
+def format_bytes(size: int, *, lang: str = "pt_BR") -> str:
     """Formata quantidade de bytes usando unidades binárias legíveis."""
+    is_pt = str(lang or "pt_BR").lower().startswith("pt")
     if size < 1024:
         return f"{size} B"
     units = ("KiB", "MiB", "GiB", "TiB")
@@ -52,7 +59,8 @@ def format_bytes(size: int) -> str:
     for unit in units:
         value /= 1024.0
         if value < 1024.0 or unit == units[-1]:
-            return f"{value:.1f} {unit}".replace(".", ",")
+            formatted = f"{value:.1f} {unit}"
+            return formatted.replace(".", ",") if is_pt else formatted
     return f"{size} B"
 
 
