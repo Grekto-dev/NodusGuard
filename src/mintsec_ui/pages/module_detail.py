@@ -813,7 +813,7 @@ class ModuleDetailPage(Gtk.Box):
         set_accessible(disc_btn, disc_lbl, tr("detail.net_discover_desc"))
         disc_btn.connect(
             "clicked",
-            lambda *_: self._on_network_discover(net_id),
+            lambda b: self._on_network_discover(net_id, busy_widget=b),
         )
         btn_row.pack_start(home_btn, False, False, 0)
         btn_row.pack_start(disc_btn, False, False, 0)
@@ -954,13 +954,20 @@ class ModuleDetailPage(Gtk.Box):
         card.pack_start(row, False, False, 0)
         self.body_box.pack_start(card, False, False, 0)
 
-    def _on_network_discover(self, net_id: str) -> None:
-        try:
-            self.app_window.controller.network.active_discover(net_id)
+    def _on_network_discover(self, net_id: str, busy_widget: Any = None) -> None:
+        def _done(_res: Any = None) -> None:
             self.app_window.controller.invalidate_cache("network")
             self.app_window.refresh_all(force=True)
-        except Exception as exc:
-            self._show_error(str(exc))
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.network.active_discover(net_id),
+            on_success=_done,
+            on_error=lambda exc: self._show_error(exc, operation=tr("win.activity_net_discover")),
+            busy_widget=busy_widget if isinstance(busy_widget, Gtk.Widget) else None,
+            activity_label=tr("win.activity_net_discover"),
+            category="network",
+        )
 
     def _on_network_recognize(self, mac: str, label: str) -> None:
         try:

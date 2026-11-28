@@ -10,7 +10,9 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
+from mintsec.formatting import format_error_message  # noqa: E402
 from mintsec_ui.a11y import relate_label, set_accessible  # noqa: E402
+from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.i18n import format_ui_bytes, format_ui_datetime, tr  # noqa: E402
 from mintsec_ui.widgets import (  # noqa: E402
@@ -521,12 +523,12 @@ class RecoveryPage(Gtk.Box):
             write_btn.get_style_context().add_class("destructive-action")
         set_accessible(write_btn, write_lbl, tr("rec.usb_write_desc"))
         if safe:
-            write_btn.connect("clicked", lambda _b, cand=safe[0]: self._on_write_rescue_usb(cand))
+            write_btn.connect("clicked", lambda b, cand=safe[0]: self._on_write_rescue_usb(cand, busy_widget=b))
         btn_row.pack_start(write_btn, False, False, 0)
         self.usb_list_box.pack_start(btn_row, False, False, 0)
         self.usb_list_box.show_all()
 
-    def _on_write_rescue_usb(self, cand_dict: dict[str, Any]) -> None:
+    def _on_write_rescue_usb(self, cand_dict: dict[str, Any], busy_widget: Any = None) -> None:
         from mintsec.services.rescue import BlockDeviceCandidate
 
         chooser = Gtk.FileChooserDialog(
@@ -568,20 +570,34 @@ class RecoveryPage(Gtk.Box):
             return
 
         cand = BlockDeviceCandidate(**cand_dict)
-        try:
-            res = self.app_window.controller.rescue.validate_and_write_image(
+        op_label = tr("win.activity_usb_write")
+
+        def _done(res: dict[str, Any]) -> None:
+            self.files_feedback.set_text(
+                tr("rec.usb_done_msg", size=format_ui_bytes(res["bytes_written"]), sha=res["sha256"][:12])
+            )
+
+        def _err(exc: Exception) -> None:
+            self.files_feedback.set_text(tr("rec.usb_fail_msg", err=format_error_message(exc)))
+            if hasattr(self.app_window, "show_error"):
+                self.app_window.show_error(exc, operation=op_label)
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.rescue.validate_and_write_image(
                 image_path=Path(iso_path),
                 target_path=Path(cand.path),
                 expected_identity=cand,
                 reopened_identity=cand,
                 confirmed=True,
                 use_udisks2=True,
-            )
-            self.files_feedback.set_text(
-                tr("rec.usb_done_msg", size=format_ui_bytes(res["bytes_written"]), sha=res["sha256"][:12])
-            )
-        except Exception as exc:
-            self.files_feedback.set_text(tr("rec.usb_fail_msg", err=exc))
+            ),
+            on_success=_done,
+            on_error=_err,
+            busy_widget=busy_widget if isinstance(busy_widget, Gtk.Widget) else None,
+            activity_label=op_label,
+            category="rescue",
+        )
 
     def _on_save_repo(self, *_args: object) -> None:
         repo_path = self.repo_entry.get_text().strip()
@@ -637,29 +653,57 @@ class RecoveryPage(Gtk.Box):
         pw = self._ask_repo_password(tr("rec.pw_backup_title"))
         if pw is None:
             return
-        try:
-            res = self.app_window.controller.recovery.backup_now(password=pw)
+        op_label = tr("win.activity_backup")
+
+        def _done(res: dict[str, Any]) -> None:
             self.app_window.controller.invalidate_cache("recovery")
             self.files_feedback.set_text(
                 tr("rec.backup_done_msg", ts=format_ui_datetime(res.get("completed_at")))
             )
             self.app_window.refresh_all(force=True)
-        except Exception as exc:
-            self.files_feedback.set_text(tr("rec.backup_fail_msg", err=exc))
+
+        def _err(exc: Exception) -> None:
+            self.files_feedback.set_text(tr("rec.backup_fail_msg", err=format_error_message(exc)))
+            if hasattr(self.app_window, "show_error"):
+                self.app_window.show_error(exc, operation=op_label)
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.recovery.backup_now(password=pw),
+            on_success=_done,
+            on_error=_err,
+            busy_widget=self.btn_backup_now,
+            activity_label=op_label,
+            category="recovery",
+        )
 
     def _on_test_restore(self, *_args: object) -> None:
         pw = self._ask_repo_password(tr("rec.pw_test_title"))
         if pw is None:
             return
-        try:
-            res = self.app_window.controller.recovery.test_restore(password=pw)
+        op_label = tr("win.activity_test_restore")
+
+        def _done(res: dict[str, Any]) -> None:
             self.app_window.controller.invalidate_cache("recovery")
             self.files_feedback.set_text(
                 tr("rec.test_done_msg", ts=format_ui_datetime(res.get("tested_at")), res=res.get("result"))
             )
             self.app_window.refresh_all(force=True)
-        except Exception as exc:
-            self.files_feedback.set_text(tr("rec.test_fail_msg", err=exc))
+
+        def _err(exc: Exception) -> None:
+            self.files_feedback.set_text(tr("rec.test_fail_msg", err=format_error_message(exc)))
+            if hasattr(self.app_window, "show_error"):
+                self.app_window.show_error(exc, operation=op_label)
+
+        run_ui_task(
+            self.app_window,
+            lambda: self.app_window.controller.recovery.test_restore(password=pw),
+            on_success=_done,
+            on_error=_err,
+            busy_widget=self.btn_test_restore,
+            activity_label=op_label,
+            category="recovery",
+        )
 
     def _on_restore_other_folder(self, *_args: object) -> None:
         chooser = Gtk.FileChooserDialog(

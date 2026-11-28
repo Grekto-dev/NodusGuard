@@ -73,6 +73,15 @@ class SystemModuleClient:
             self._bus = dbus.SystemBus()
         return self._bus
 
+    @staticmethod
+    def _ensure_dbus_threads_init() -> None:
+        try:
+            import dbus.mainloop.glib as dbus_glib
+
+            dbus_glib.threads_init()
+        except Exception:  # noqa: BLE001
+            pass
+
     def call_dbus(
         self,
         module_id: str,
@@ -84,12 +93,27 @@ class SystemModuleClient:
         import dbus
 
         manifest = self.manifests[module_id]
-        bus = self._get_bus()
-        obj = bus.get_object(manifest.dbus_bus_name, manifest.dbus_object_path)
-        iface = dbus.Interface(obj, manifest.dbus_bus_name)
-        fn = getattr(iface, method_name)
-        raw = fn(*args, timeout=timeout)
-        return json.loads(str(raw))
+        if self._bus is not None:
+            obj = self._bus.get_object(manifest.dbus_bus_name, manifest.dbus_object_path)
+            iface = dbus.Interface(obj, manifest.dbus_bus_name)
+            fn = getattr(iface, method_name)
+            raw = fn(*args, timeout=timeout)
+            return json.loads(str(raw))
+
+        # Conexão privada por chamada evita contenção/corrupção entre threads GTK/worker.
+        self._ensure_dbus_threads_init()
+        bus = dbus.SystemBus(private=True)
+        try:
+            obj = bus.get_object(manifest.dbus_bus_name, manifest.dbus_object_path)
+            iface = dbus.Interface(obj, manifest.dbus_bus_name)
+            fn = getattr(iface, method_name)
+            raw = fn(*args, timeout=timeout)
+            return json.loads(str(raw))
+        finally:
+            try:
+                bus.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def query_status(self, module_id: str, local_service: Any) -> dict[str, Any]:
         if is_system_bus_mode():

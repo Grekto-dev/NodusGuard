@@ -213,13 +213,16 @@ class HomePage(Gtk.Box):
             self._last_bottom_sig,
         )
 
+    def invalidate_render_cache(self) -> None:
+        self._last_recs_sig = None
+        self._last_cards_sig = None
+        self._last_coverage_sig = None
+        self._last_bottom_sig = None
+
     @_last_render_sig.setter
     def _last_render_sig(self, value: Any) -> None:
         if value is None:
-            self._last_recs_sig = None
-            self._last_cards_sig = None
-            self._last_coverage_sig = None
-            self._last_bottom_sig = None
+            self.invalidate_render_cache()
 
     def _make_meta_chip(self, icon_name: str) -> tuple[Gtk.Box, Gtk.Label]:
         pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -765,6 +768,9 @@ class HomePage(Gtk.Box):
 
     def _on_apply_single_rec(self, rec: dict[str, Any], btn: Any = None) -> None:
         action = str(rec.get("action", ""))
+        if action == "update_db":
+            self.app_window.trigger_db_update(busy_widget=btn if isinstance(btn, Gtk.Widget) else None)
+            return
         if not rec.get("auto_apply") or action == "quick_scan":
             self._run_action(action, rec.get("target"))
             return
@@ -772,10 +778,10 @@ class HomePage(Gtk.Box):
         def _done(_res: dict[str, Any]) -> None:
             self.recs_feedback_lbl.set_text(tr("home.recs_applied_ok", count=1))
             self.recs_feedback_lbl.show()
-            self._last_render_sig = None
+            self.invalidate_render_cache()
             self.app_window.refresh_all(force=True)
 
-        rec_title, _sub, _act = self._describe_recommendation(rec, has_last_scan=self._last_has_scan)
+        rec_title, _sub, _act, _tone = self._describe_recommendation(rec, has_last_scan=self._last_has_scan)
         run_ui_task(
             self.app_window,
             lambda: self.app_window.controller.apply_recommendation(rec),

@@ -16,6 +16,7 @@ from mintsec import APP_NAME  # noqa: E402
 from mintsec.formatting import build_error_report, format_error_message  # noqa: E402
 from mintsec.services.catalog import SuiteController  # noqa: E402
 from mintsec_ui.a11y import set_accessible  # noqa: E402
+from mintsec_ui.actions import run_ui_task  # noqa: E402
 from mintsec_ui.dialogs.confirm import ask_action_confirmation  # noqa: E402
 from mintsec_ui.dialogs.error_dialog import show_error_dialog  # noqa: E402
 from mintsec_ui.dialogs.first_run import FirstRunDialog  # noqa: E402
@@ -960,55 +961,65 @@ class SuiteWindow(Gtk.ApplicationWindow):
         self.settings_page.refresh()
         self.refresh_all(force=False)
 
-    def trigger_db_update(self) -> None:
+    def trigger_db_update(self, *, busy_widget: Any = None) -> None:
         if self._updating_db:
             return
         self._updating_db = True
-        btn = getattr(self.home_page, "update_db_btn", None)
-        if btn is not None:
-            btn.set_sensitive(False)
-        tid = self.begin_activity(tr("win.activity_update_db"), category="antimalware")
+        home_btn = getattr(self.home_page, "update_db_btn", None)
+        if home_btn is not None:
+            home_btn.set_sensitive(False)
+        extra_btn = (
+            busy_widget
+            if isinstance(busy_widget, Gtk.Widget) and busy_widget is not home_btn
+            else None
+        )
 
-        def _worker() -> None:
-            ok = False
-            err_obj: Exception | str | None = None
-            try:
-                res = self.controller.update_antimalware_signatures()
-                ok = bool(res.get("ok"))
-                if not ok:
-                    err_obj = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
-            except Exception as exc:  # noqa: BLE001
-                err_obj = exc
+        def _cleanup_buttons() -> None:
+            self._updating_db = False
+            if home_btn is not None:
+                home_btn.set_sensitive(True)
 
-            def _done() -> bool:
-                self._updating_db = False
-                if self._destroyed:
-                    return False
-                err_text = (
-                    format_error_message(err_obj)
-                    if isinstance(err_obj, Exception)
-                    else str(err_obj or "")
+        def _on_success(res: dict[str, Any]) -> None:
+            _cleanup_buttons()
+            ok = bool(res.get("ok"))
+            if not ok:
+                err_txt = str(res.get("stderr") or res.get("stdout") or "freshclam failed").strip()
+                self.scans_page.scan_status_lbl.set_text(
+                    tr("win.db_update_failed", err=err_txt)
                 )
-                self.end_activity(tid, status="ok" if ok else "error", detail=err_text)
-                if btn is not None:
-                    btn.set_sensitive(True)
-                if not ok and err_obj:
-                    self.scans_page.scan_status_lbl.set_text(
-                        tr("win.db_update_failed", err=err_text)
-                    )
-                    self.show_error(
-                        err_obj,
-                        operation=tr("win.activity_update_db"),
-                        source="FreshClam",
-                    )
-                else:
-                    self.scans_page.scan_status_lbl.set_text(tr("win.db_update_done"))
-                self.refresh_all(force=True)
-                return False
+                self.show_error(
+                    err_txt,
+                    operation=tr("win.activity_update_db"),
+                    source="FreshClam",
+                )
+            else:
+                self.scans_page.scan_status_lbl.set_text(tr("win.db_update_done"))
+                if hasattr(self.home_page, "invalidate_render_cache"):
+                    self.home_page.invalidate_render_cache()
+            self.refresh_all(force=True)
 
-            GLib.idle_add(_done)
+        def _on_error(exc: Exception) -> None:
+            _cleanup_buttons()
+            err_text = format_error_message(exc)
+            self.scans_page.scan_status_lbl.set_text(
+                tr("win.db_update_failed", err=err_text)
+            )
+            self.show_error(
+                exc,
+                operation=tr("win.activity_update_db"),
+                source="FreshClam",
+            )
+            self.refresh_all(force=True)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        run_ui_task(
+            self,
+            self.controller.update_antimalware_signatures,
+            on_success=_on_success,
+            on_error=_on_error,
+            busy_widget=extra_btn,
+            activity_label=tr("win.activity_update_db"),
+            category="antimalware",
+        )
 
     def _on_periodic_tick(self) -> bool:
         if self._destroyed:

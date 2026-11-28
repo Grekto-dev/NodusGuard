@@ -5,6 +5,17 @@ All notable changes to **NodusGuard** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-11-28
+
+### Fixed
+- **Virus Database Update Resolution & Freshness Detection**:
+  - Fixed silent `ValueError` (4-tuple unpack mismatch) when clicking single-recommendation action buttons such as **Update now** on the Home dashboard (`HomePage._on_apply_single_rec`), and routed `update_db` recommendations directly through `MainWindow.trigger_db_update` with proper button sensitivity and cache invalidation.
+  - Updated `AntimalwareService.signature_status()` to combine on-disk `.cvd`/`.cld` timestamps with validated `last_signature_update_at` and `freshclam.dat` check timestamps (bounded against future clock skew), so a clean `freshclam` run reporting *"database is up-to-date"* without touching `daily.cld`'s `mtime` immediately clears `db_outdated` warnings.
+  - Verified database file availability after `freshclam` exits cleanly in `AntimalwareService.update_signatures()`.
+- **Global UI & D-Bus Responsiveness**:
+  - Switched live `DbusModuleClient.call_dbus()` calls to isolated private `dbus.SystemBus(private=True)` connections with `dbus.mainloop.glib.threads_init()` to eliminate cross-thread GLib/D-Bus contention and multi-second UI stalls.
+  - Migrated `MainWindow.trigger_db_update()`, `RecoveryPage` backup/test-restore/USB-write actions, and `ModuleDetailPage` network discovery to non-blocking `run_ui_task()` execution with global progress feedback and localized diagnostics (`win.activity_backup`, `win.activity_test_restore`, `win.activity_usb_write`, `win.activity_net_discover`).
+
 ## [0.2.5] - 2026-11-25
 
 ### Fixed
